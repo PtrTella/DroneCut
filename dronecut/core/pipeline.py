@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 import numpy as np
 
 class DroneCutPipeline:
-    def __init__(self, prompts=None, min_scene_duration=1.5, max_scenes=30, speed=1.5, max_duration=None, threshold=20.0, music_path=None):
+    def __init__(self, prompts=None, negative_prompts=None, min_scene_duration=1.5, max_scenes=30, speed=1.5, max_duration=None, threshold=20.0, music_path=None):
         self.prompts = prompts or ["cinematic drone photography", "spectacular landscape", "epic mountain view", "breathtaking nature", "scenographic shot"]
+        self.negative_prompts = negative_prompts or ["blur", "shaky", "bad quality", "low resolution", "distorted"]
         self.min_scene_duration = min_scene_duration
         self.max_scenes = max_scenes
         self.speed = speed # This is the base speed
@@ -58,7 +59,7 @@ class DroneCutPipeline:
                     
                     if visual_metrics["max_jerk"] > 12.0: continue
 
-                    semantic_score, embedding = self.semantic_analyzer.score_scene(proxy_path, start, end, self.prompts)
+                    semantic_score, embedding = self.semantic_analyzer.score_scene(proxy_path, start, end, self.prompts, self.negative_prompts)
                     total_score = (semantic_score * 50) + (min(visual_metrics["avg_contrast"], 50) / 25.0)
                     
                     multiplier = max(1.0, 1.0 + (40 - visual_metrics["avg_motion"]) / 8.0)

@@ -37,7 +37,8 @@ async function startAnalysis() {
             body: JSON.stringify({
                 video_paths: videoPaths,
                 music_path: musicPath || null,
-                prompts: [...prompts, ...negativePrompts.map(p => `not ${p}`)], // Simplified negative logic
+                prompts: prompts,
+                negative_prompts: negativePrompts,
                 speed,
                 threshold,
                 max_scenes: maxScenes,

@@ -38,6 +38,7 @@ class AnalyzeRequest(BaseModel):
     video_paths: List[str]
     music_path: Optional[str] = None
     prompts: List[str] = []
+    negative_prompts: List[str] = []
     speed: float = 1.5
     threshold: float = 20.0
     max_scenes: int = 40
@@ -139,6 +140,7 @@ async def analyze(req: AnalyzeRequest):
         logger.info(f"Starting analysis for {req.video_paths}")
         pipeline = DroneCutPipeline(
             prompts=req.prompts,
+            negative_prompts=req.negative_prompts,
             speed=req.speed,
             threshold=req.threshold,
             max_scenes=req.max_scenes,
@@ -147,7 +149,7 @@ async def analyze(req: AnalyzeRequest):
             music_path=req.music_path
         )
         # Store config for export
-        state.pipeline_config = req.dict()
+        state.pipeline_config = req.model_dump()
         
         scenes = pipeline.analyze(req.video_paths, req.out_dir, save_session=True)
         
@@ -183,6 +185,7 @@ async def export(req: ExportRequest):
     try:
         pipeline = DroneCutPipeline(
             prompts=state.pipeline_config.get("prompts"),
+            negative_prompts=state.pipeline_config.get("negative_prompts"),
             speed=state.pipeline_config.get("speed", 1.5),
             music_path=req.music_path or state.pipeline_config.get("music_path")
         )

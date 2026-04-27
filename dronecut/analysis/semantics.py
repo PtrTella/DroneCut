@@ -34,26 +34,40 @@ class SemanticAnalyzer:
             return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         return None
 
-    def score_scene(self, video_path, start_time, end_time, prompts):
+    def score_scene(self, video_path, start_time, end_time, positive_prompts, negative_prompts=None):
         """
-        Scores a scene against a list of text prompts using CLIP and returns embedding.
-        Takes a keyframe from the middle of the scene.
+        Scores a scene by calculating (max positive similarity - max negative similarity).
         """
+        negative_prompts = negative_prompts or []
+        all_prompts = positive_prompts + negative_prompts
+        
         mid_time = (start_time + end_time) / 2
         image = self.get_keyframe(video_path, mid_time)
         if image is None:
             return 0.0, None
             
-        inputs = self.processor(text=prompts, images=image, return_tensors="pt", padding=True).to(self.device)
+        inputs = self.processor(text=all_prompts, images=image, return_tensors="pt", padding=True).to(self.device)
         
-        # Ensure inputs match model dtype
         if self.model.dtype != torch.float32:
             inputs["pixel_values"] = inputs["pixel_values"].to(self.model.dtype)
             
         with torch.no_grad():
             outputs = self.model(**inputs)
-            image_embeds = outputs.image_embeds # normalized image features
-            logits_per_image = outputs.logits_per_image 
-            probs = logits_per_image.softmax(dim=1) 
+            # image_embeds are the projected visual features
+            # text_embeds are the projected text features
+            image_embeds = outputs.image_embeds / outputs.image_embeds.norm(dim=-1, keepdim=True)
+            text_embeds = outputs.text_embeds / outputs.text_embeds.norm(dim=-1, keepdim=True)
             
-        return probs.max().item(), image_embeds.cpu().numpy()
+            # Cosine similarities
+            similarities = (image_embeds @ text_embeds.T).squeeze(0) # [num_prompts]
+            
+        pos_sims = similarities[:len(positive_prompts)]
+        neg_sims = similarities[len(positive_prompts):]
+        
+        max_pos = pos_sims.max().item() if len(pos_sims) > 0 else 0.0
+        max_neg = neg_sims.max().item() if len(neg_sims) > 0 else 0.0
+        
+        # Final score is the difference. We use max() to avoid negative results if positive is strong
+        final_score = max_pos - max_neg
+        
+        return float(final_score), image_embeds.cpu().numpy()
