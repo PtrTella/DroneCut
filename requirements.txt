@@ -1,0 +1,9 @@
+opencv-python
+scenedetect[opencv]
+transformers
+torch
+torchvision
+numpy
+tqdm
+pillow
+librosa
