@@ -7,3 +7,6 @@ numpy
 tqdm
 pillow
 librosa
+fastapi
+uvicorn
+python-multipart
