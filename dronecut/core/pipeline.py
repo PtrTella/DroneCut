@@ -29,33 +29,24 @@ class DroneCutPipeline:
         b = b.flatten()
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    def run(self, input_videos, out_dir):
+    def analyze(self, input_videos, out_dir, save_session=False):
+        """
+        Phase 1: Analyzes videos, detects scenes, and generates low-res proxies for preview.
+        Returns a list of scene metadata objects.
+        """
         os.makedirs(out_dir, exist_ok=True)
-        clips_dir = os.path.join(out_dir, "clips")
-        os.makedirs(clips_dir, exist_ok=True)
-        
-        output_final_no_audio = os.path.join(out_dir, "final_no_audio.mp4")
-        output_final = os.path.join(out_dir, "final.mp4")
-        
-        # 1. Audio Beat Analysis if music provided
-        beats = []
-        if self.music_path:
-            beats = get_beat_timestamps(self.music_path)
-            # We want intervals between beats
-            beat_intervals = np.diff(beats).tolist()
-            logger.info(f"Using {len(beat_intervals)} beat intervals for music sync.")
+        proxies_dir = os.path.join(out_dir, "previews")
+        os.makedirs(proxies_dir, exist_ok=True)
         
         all_potential_scenes = []
         
         with tempfile.TemporaryDirectory() as tmp_dir:
             for i, video_path in enumerate(input_videos):
-                logger.info(f"Processing video {i+1}/{len(input_videos)}: {video_path}")
-                
+                logger.info(f"Analyzing: {video_path}")
                 proxy_path = os.path.join(tmp_dir, f"proxy_{i}.mp4")
                 create_proxy(video_path, proxy_path)
                 
                 scenes = detect_scenes(proxy_path, threshold=self.threshold)
-                logger.info(f"Detected {len(scenes)} potential scenes.")
                 
                 for start, end in scenes:
                     duration = end - start
@@ -63,115 +54,134 @@ class DroneCutPipeline:
                         continue
                         
                     visual_metrics = analyze_scene_visuals(proxy_path, start, end)
-                    if not visual_metrics:
-                        continue
+                    if not visual_metrics: continue
                     
-                    avg_motion = visual_metrics["avg_motion"]
-                    max_jerk = visual_metrics["max_jerk"]
-                    
-                    if max_jerk > 12.0: 
-                        logger.info(f"Discarding jerky scene: {start:.1f}-{end:.1f} (jerk {max_jerk:.2f})")
-                        continue
+                    if visual_metrics["max_jerk"] > 12.0: continue
 
                     semantic_score, embedding = self.semantic_analyzer.score_scene(proxy_path, start, end, self.prompts)
                     total_score = (semantic_score * 50) + (min(visual_metrics["avg_contrast"], 50) / 25.0)
                     
-                    # ENHANCED Adaptive Speedup:
-                    # Drone motion values are often 30-50. 
-                    # If motion is < 40, we start accelerating.
-                    # Max total speed capped at 5x.
-                    multiplier = max(1.0, 1.0 + (40 - avg_motion) / 8.0)
+                    multiplier = max(1.0, 1.0 + (40 - visual_metrics["avg_motion"]) / 8.0)
                     adaptive_speed = min(5.0, self.speed * multiplier)
 
-                    logger.info(f"Scene {start:.1f}-{end:.1f} | Score: {total_score:.2f} | CLIP: {semantic_score:.4f} | Motion: {avg_motion:.2f} | Speed: {adaptive_speed:.1f}x")
+                    # Generate a unique proxy for this specific scene
+                    scene_id = len(all_potential_scenes)
+                    scene_proxy_name = f"scene_{scene_id:04d}_preview.mp4"
+                    scene_proxy_path = os.path.join(proxies_dir, scene_proxy_name)
+                    
+                    # Extract a very low-res fast proxy for the web UI
+                    # (we use original video for preview)
+                    extract_clip(video_path, scene_proxy_path, start, end, speed=adaptive_speed)
 
                     all_potential_scenes.append({
+                        "id": scene_id,
                         "input": video_path,
                         "start": start,
                         "end": end,
-                        "score": total_score,
+                        "score": float(total_score),
+                        "clip_score": float(semantic_score),
                         "embedding": embedding,
                         "duration": duration,
-                        "adaptive_speed": adaptive_speed
+                        "adaptive_speed": adaptive_speed,
+                        "preview_url": scene_proxy_path
                     })
 
-            # Sort by score
-            all_potential_scenes.sort(key=lambda x: x["score"], reverse=True)
+        # Sort by start time for chronological presentation
+        all_potential_scenes.sort(key=lambda x: (x["input"], x["start"]))
+        
+        # Save metadata for session recovery (GUI only)
+        if save_session:
+            import json
+            metadata_path = os.path.join(out_dir, "metadata.json")
+            with open(metadata_path, "w") as f:
+                serializable_scenes = []
+                for s in all_potential_scenes:
+                    s_copy = s.copy()
+                    if "embedding" in s_copy: del s_copy["embedding"]
+                    serializable_scenes.append(s_copy)
+                json.dump(serializable_scenes, f)
             
-            selected_scenes = []
-            total_selected_duration = 0
+        return all_potential_scenes
+
+    def export(self, selected_scenes, out_dir):
+        """
+        Phase 2: Takes a list of scenes and produces the final high-quality video.
+        """
+        os.makedirs(out_dir, exist_ok=True)
+        clips_dir = os.path.join(out_dir, "clips")
+        os.makedirs(clips_dir, exist_ok=True)
+        
+        output_final_no_audio = os.path.join(out_dir, "final_no_audio.mp4")
+        output_final = os.path.join(out_dir, "final.mp4")
+        
+        # Audio Beat Analysis
+        beats = []
+        if self.music_path:
+            beats = get_beat_timestamps(self.music_path)
+            beat_intervals = np.diff(beats).tolist()
+        
+        clip_files = []
+        for j, scene in enumerate(selected_scenes):
+            clip_filename = f"clip_{j+1:03d}.mp4"
+            clip_path = os.path.join(clips_dir, clip_filename)
             
-            # Decide how many scenes we need
-            target_scene_count = self.max_scenes
-            if beats:
-                target_scene_count = len(beat_intervals)
-                logger.info(f"Targeting {target_scene_count} scenes for music sync.")
-
-            for scene in all_potential_scenes:
-                # DIVERSITY
-                is_repetitive = False
-                for selected in selected_scenes:
-                    similarity = self.cosine_similarity(scene["embedding"], selected["embedding"])
-                    if similarity > 0.94: 
-                        is_repetitive = True
-                        break
+            if beats and j < len(beat_intervals):
+                target_duration = beat_intervals[j]
+                source_extract_duration = target_duration * scene["adaptive_speed"]
+                extract_end = scene["start"] + source_extract_duration
+                if extract_end > scene["end"]: extract_end = scene["end"]
                 
-                if is_repetitive:
-                    logger.info(f"Discarding repetitive scene: {scene['start']:.1f}-{scene['end']:.1f}")
-                    continue
-                
-                selected_scenes.append(scene)
-                
-                # Check duration limit if no music
-                if not beats:
-                    scene_final_duration = scene["duration"] / scene["adaptive_speed"]
-                    total_selected_duration += scene_final_duration
-                    if self.max_duration and total_selected_duration > self.max_duration:
-                        break
-
-                if len(selected_scenes) >= target_scene_count:
-                    break
-
-            # Sort for flow
-            selected_scenes.sort(key=lambda x: (x["input"], x["start"]))
-
-            # Extract and save
-            clip_files = []
-            for j, scene in enumerate(selected_scenes):
-                clip_filename = f"clip_{j+1:03d}.mp4"
-                clip_path = os.path.join(clips_dir, clip_filename)
-                
-                # If music sync is ON, the final duration must match the beat interval
-                if beats and j < len(beat_intervals):
-                    target_duration = beat_intervals[j]
-                    # The source duration we extract is target_duration * speed
-                    source_extract_duration = target_duration * scene["adaptive_speed"]
-                    
-                    # Adjust extraction end time to match the required duration
-                    extract_end = scene["start"] + source_extract_duration
-                    if extract_end > scene["end"]:
-                        # If scene is too short for the beat, we might need to slow it down 
-                        # or just take what we have. For now, let's just cap it.
-                        extract_end = scene["end"]
-                    
-                    logger.info(f"Syncing clip {j+1} to beat: {target_duration:.2f}s (Speed {scene['adaptive_speed']:.1f}x)")
-                    extract_clip(scene["input"], clip_path, scene["start"], extract_end, speed=scene["adaptive_speed"])
-                else:
-                    logger.info(f"Extracting clip {j+1}: {scene['start']:.1f}-{scene['end']:.1f} (Speed {scene['adaptive_speed']:.1f}x)")
-                    extract_clip(scene["input"], clip_path, scene["start"], scene["end"], speed=scene["adaptive_speed"])
-                
-                clip_files.append(clip_path)
-                
-            if clip_files:
-                concatenate_clips(clip_files, output_final_no_audio)
-                
-                if self.music_path:
-                    logger.info("Merging music...")
-                    add_background_music(output_final_no_audio, self.music_path, output_final)
-                    os.remove(output_final_no_audio)
-                else:
-                    os.rename(output_final_no_audio, output_final)
-                    
-                logger.info(f"Processing complete. Results in: {out_dir}")
+                logger.info(f"Syncing clip {j+1} to beat: {target_duration:.2f}s")
+                extract_clip(scene["input"], clip_path, scene["start"], extract_end, speed=scene["adaptive_speed"])
             else:
-                logger.warning("No scenes selected!")
+                logger.info(f"Extracting clip {j+1}: {scene['start']:.1f}-{scene['end']:.1f}")
+                extract_clip(scene["input"], clip_path, scene["start"], scene["end"], speed=scene["adaptive_speed"])
+            
+            clip_files.append(clip_path)
+            
+        if clip_files:
+            concatenate_clips(clip_files, output_final_no_audio)
+            if self.music_path:
+                add_background_music(output_final_no_audio, self.music_path, output_final)
+                os.remove(output_final_no_audio)
+            else:
+                os.rename(output_final_no_audio, output_final)
+            return output_final
+        return None
+
+    def run(self, input_videos, out_dir):
+        """Standard CLI entry point"""
+        # Analysis
+        all_scenes = self.analyze(input_videos, out_dir)
+        
+        # Automatic selection (same logic as before)
+        selected_scenes = []
+        total_selected_duration = 0
+        
+        # We need a beat count if music is present
+        target_count = self.max_scenes
+        if self.music_path:
+            # We don't want to re-analyze music here, but run() is for CLI.
+            # For CLI we just use the simple logic.
+            pass
+
+        for scene in all_scenes:
+            is_repetitive = False
+            for selected in selected_scenes:
+                similarity = self.cosine_similarity(scene["embedding"], selected["embedding"])
+                if similarity > 0.94: 
+                    is_repetitive = True
+                    break
+            if is_repetitive: continue
+            
+            selected_scenes.append(scene)
+            if not self.music_path:
+                total_selected_duration += scene["duration"] / scene["adaptive_speed"]
+                if self.max_duration and total_selected_duration > self.max_duration:
+                    break
+            if len(selected_scenes) >= target_count:
+                break
+        
+        selected_scenes.sort(key=lambda x: (x["input"], x["start"]))
+        self.export(selected_scenes, out_dir)
+        logger.info(f"Processing complete. Results in: {out_dir}")

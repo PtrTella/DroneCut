@@ -20,33 +20,28 @@ def create_proxy(input_path, output_path, scale="640:360", fps=10):
 def extract_clip(input_path, output_path, start_time, end_time, speed=1.0):
     """
     Extracts a clip from the input video using timestamps and applies speedup.
-    When speed != 1.0, we re-encode to apply filters and remove audio.
     """
     duration = end_time - start_time
     
-    if speed == 1.0:
-        cmd = [
-            "ffmpeg", "-y", 
-            "-ss", str(start_time), 
-            "-t", str(duration),
-            "-i", input_path,
-            "-c", "copy",
-            output_path
-        ]
-    else:
-        # Re-encode to apply speedup filter
-        # setpts=1/speed*PTS
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", str(start_time),
-            "-t", str(duration),
-            "-i", input_path,
-            "-vf", f"setpts={1/speed}*PTS",
-            "-an", # Remove audio
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            output_path
-        ]
+    # Build filter string
+    filters = []
+    if speed != 1.0:
+        filters.append(f"setpts={1/speed}*PTS")
     
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start_time),
+        "-t", str(duration),
+        "-i", input_path
+    ]
+    
+    if filters:
+        cmd.extend(["-vf", ",".join(filters)])
+        cmd.extend(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23"])
+    else:
+        cmd.extend(["-c", "copy"])
+        
+    cmd.append(output_path)
     subprocess.run(cmd, check=True, capture_output=True)
 
 def concatenate_clips(clip_paths, output_path):
