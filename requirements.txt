@@ -15,3 +15,5 @@ timm
 einops 
 huggingface_hub
 accelerate
+scikit-learn
+mlx-vlm

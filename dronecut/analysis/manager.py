@@ -21,7 +21,7 @@ class AnalysisManager:
         logger.info(f"Initializing AnalysisManager on {self.device} with {self.dtype}")
         
         # 1. Load CLIP
-        self.clip_model = CLIPModel.from_pretrained(clip_model, torch_dtype=self.dtype).to(self.device)
+        self.clip_model = CLIPModel.from_pretrained(clip_model, dtype=self.dtype).to(self.device)
         self.clip_processor = CLIPProcessor.from_pretrained(clip_model)
         
         # 2. Load Aesthetic Head
@@ -68,7 +68,7 @@ class AnalysisManager:
                 self.vlm_model_id, 
                 config=config,
                 trust_remote_code=True, 
-                torch_dtype=self.dtype,
+                dtype=self.dtype,
                 revision=revision,
                 device_map={"": self.device} if self.device != "cpu" else None
             )
