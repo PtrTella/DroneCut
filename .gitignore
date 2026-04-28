@@ -4,3 +4,5 @@
 /drone_cinematic
 /drone_cinematic2
 gui_output/*
+.dronecut_cache/*
+**/__pycache__/
