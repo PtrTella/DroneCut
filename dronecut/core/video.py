@@ -6,42 +6,55 @@ logger = logging.getLogger(__name__)
 
 def create_proxy(input_path, output_path, scale="640:360", fps=10):
     """
-    Creates a low-res, low-fps proxy for fast analysis.
+    Creates a low-res, low-fps proxy for fast analysis. 
+    Using CPU ultrafast as it's often faster for small resolutions.
     """
-    logger.info(f"Creating proxy for {input_path} at {output_path}")
+    logger.info(f"Creating proxy for {input_path} at {output_path} (UltraFast Mode)")
+    
     cmd = [
-        "ffmpeg", "-y", "-i", input_path,
+        "ffmpeg", "-y", 
+        "-threads", "0",             # Use all CPU cores
+        "-i", input_path,
         "-vf", f"scale={scale},fps={fps}",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-        "-an", output_path
+        "-c:v", "libx264", 
+        "-preset", "ultrafast",      # Maximum speed
+        "-crf", "32",                # Lower quality for higher speed
+        "-an",                       # No audio for speed
+        output_path
     ]
+    
     subprocess.run(cmd, check=True, capture_output=True)
 
 def extract_clip(input_path, output_path, start_time, end_time, speed=1.0):
     """
     Extracts a clip from the input video using timestamps and applies speedup.
+    Optimized for speed over quality for preview generation.
     """
     duration = end_time - start_time
     
-    # Build filter string
-    filters = []
-    if speed != 1.0:
-        filters.append(f"setpts={1/speed}*PTS")
-    
+    atempo_filters = []
+    temp_speed = speed
+    while temp_speed > 2.0:
+        atempo_filters.append("atempo=2.0")
+        temp_speed /= 2.0
+    while temp_speed < 0.5:
+        atempo_filters.append("atempo=0.5")
+        temp_speed /= 0.5
+    atempo_filters.append(f"atempo={temp_speed}")
+    atempo_str = ",".join(atempo_filters)
+
     cmd = [
         "ffmpeg", "-y",
+        "-threads", "0",
         "-ss", str(start_time),
         "-t", str(duration),
-        "-i", input_path
+        "-i", input_path,
+        "-vf", f"setpts={1.0/speed}*PTS",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-af", atempo_str,
+        output_path
     ]
     
-    if filters:
-        cmd.extend(["-vf", ",".join(filters)])
-        cmd.extend(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23"])
-    else:
-        cmd.extend(["-c", "copy"])
-        
-    cmd.append(output_path)
     subprocess.run(cmd, check=True, capture_output=True)
 
 def concatenate_clips(clip_paths, output_path):

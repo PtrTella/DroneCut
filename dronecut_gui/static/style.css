@@ -298,9 +298,19 @@ button {
 
 .scene-meta {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: var(--text-secondary);
+    gap: 8px;
+}
+
+.regia-badge {
+    background: linear-gradient(135deg, #00d2ff, #3a7bd5);
+    color: white;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 700;
 }
 
 .btn-delete {

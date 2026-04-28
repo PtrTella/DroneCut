@@ -1,188 +1,197 @@
 import os
 import logging
 import tempfile
+import json
+from tqdm import tqdm
 from .video import create_proxy, extract_clip, concatenate_clips, add_background_music
 from .scenes import detect_scenes
-from ..analysis.visual import analyze_scene_visuals
-from ..analysis.semantics import SemanticAnalyzer
-from ..analysis.audio import get_beat_timestamps
+from ..analysis.manager import AnalysisManager
 
 logger = logging.getLogger(__name__)
 
-import numpy as np
-
 class DroneCutPipeline:
     def __init__(self, prompts=None, negative_prompts=None, min_scene_duration=1.5, max_scenes=30, speed=1.5, max_duration=None, threshold=20.0, music_path=None):
-        self.prompts = prompts or ["cinematic drone photography", "spectacular landscape", "epic mountain view", "breathtaking nature", "scenographic shot"]
-        self.negative_prompts = negative_prompts or ["blur", "shaky", "bad quality", "low resolution", "distorted"]
+        self.prompts = prompts
+        self.negative_prompts = negative_prompts
         self.min_scene_duration = min_scene_duration
         self.max_scenes = max_scenes
-        self.speed = speed # This is the base speed
+        self.speed = speed
         self.max_duration = max_duration
         self.threshold = threshold
         self.music_path = music_path
-        self.semantic_analyzer = SemanticAnalyzer()
+        self.analysis_manager = AnalysisManager()
 
-    def cosine_similarity(self, a, b):
-        if a is None or b is None:
-            return 0.0
-        a = a.flatten()
-        b = b.flatten()
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-    def analyze(self, input_videos, out_dir, save_session=False):
+    def analyze(self, video_paths, out_dir="dronecut_output", pos_prompts=None, neg_prompts=None, music_path=None, skip_export=False):
         """
-        Phase 1: Analyzes videos, detects scenes, and generates low-res proxies for preview.
-        Returns a list of scene metadata objects.
+        Main entry point for the pipeline.
         """
+        if isinstance(video_paths, str):
+            video_paths = [video_paths]
+            
         os.makedirs(out_dir, exist_ok=True)
-        proxies_dir = os.path.join(out_dir, "previews")
-        os.makedirs(proxies_dir, exist_ok=True)
+        all_selected_scenes = []
         
-        all_potential_scenes = []
-        
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            for i, video_path in enumerate(input_videos):
-                logger.info(f"Analyzing: {video_path}")
-                proxy_path = os.path.join(tmp_dir, f"proxy_{i}.mp4")
-                create_proxy(video_path, proxy_path)
-                
-                scenes = detect_scenes(proxy_path, threshold=self.threshold)
-                
-                for start, end in scenes:
-                    duration = end - start
-                    if duration < self.min_scene_duration:
-                        continue
-                        
-                    visual_metrics = analyze_scene_visuals(proxy_path, start, end)
-                    if not visual_metrics: continue
-                    
-                    if visual_metrics["max_jerk"] > 12.0: continue
-
-                    semantic_score, embedding = self.semantic_analyzer.score_scene(proxy_path, start, end, self.prompts, self.negative_prompts)
-                    total_score = (semantic_score * 50) + (min(visual_metrics["avg_contrast"], 50) / 25.0)
-                    
-                    multiplier = max(1.0, 1.0 + (40 - visual_metrics["avg_motion"]) / 8.0)
-                    adaptive_speed = min(5.0, self.speed * multiplier)
-
-                    # Generate a unique proxy for this specific scene
-                    scene_id = len(all_potential_scenes)
-                    scene_proxy_name = f"scene_{scene_id:04d}_preview.mp4"
-                    scene_proxy_path = os.path.join(proxies_dir, scene_proxy_name)
-                    
-                    # Extract a very low-res fast proxy for the web UI
-                    # (we use original video for preview)
-                    extract_clip(video_path, scene_proxy_path, start, end, speed=adaptive_speed)
-
-                    all_potential_scenes.append({
-                        "id": scene_id,
-                        "input": video_path,
-                        "start": start,
-                        "end": end,
-                        "score": float(total_score),
-                        "clip_score": float(semantic_score),
-                        "embedding": embedding,
-                        "duration": duration,
-                        "adaptive_speed": adaptive_speed,
-                        "preview_url": scene_proxy_path
-                    })
-
-        # Sort by start time for chronological presentation
-        all_potential_scenes.sort(key=lambda x: (x["input"], x["start"]))
-        
-        # Save metadata for session recovery (GUI only)
-        if save_session:
-            import json
-            metadata_path = os.path.join(out_dir, "metadata.json")
-            with open(metadata_path, "w") as f:
-                serializable_scenes = []
-                for s in all_potential_scenes:
-                    s_copy = s.copy()
-                    if "embedding" in s_copy: del s_copy["embedding"]
-                    serializable_scenes.append(s_copy)
-                json.dump(serializable_scenes, f)
+        for video_index, video_path in enumerate(video_paths):
+            logger.info(f"--- Processing Video: {os.path.basename(video_path)} ---")
             
-        return all_potential_scenes
+            # 1. Detection
+            scenes = self._stage_detection(video_path)
+            
+            # 2. Fast Scoring
+            scored_scenes = self._stage_fast_scoring(video_path, scenes, pos_prompts, neg_prompts)
+            
+            # 3. VLM Funnel (Deep analysis of top candidates)
+            refined_scenes = self._stage_vlm_funnel(video_path, scored_scenes)
+            
+            # 4. Scene Extraction
+            final_scenes = self._stage_extraction(video_path, refined_scenes, out_dir, video_index)
+            all_selected_scenes.extend(final_scenes)
 
-    def export(self, selected_scenes, out_dir):
+        # 5. Final Export (Optional Montage)
+        if not skip_export and all_selected_scenes:
+            self._stage_export_montage(all_selected_scenes, out_dir, music_path)
+            
+        logger.info(f"Processing complete. Results in {out_dir}")
+        return all_selected_scenes
+
+    def _stage_detection(self, video_path):
         """
-        Phase 2: Takes a list of scenes and produces the final high-quality video.
+        Creates a proxy and detects scenes using PySceneDetect.
+        Uses a persistent cache to avoid re-compressing the same video.
         """
-        os.makedirs(out_dir, exist_ok=True)
-        clips_dir = os.path.join(out_dir, "clips")
-        os.makedirs(clips_dir, exist_ok=True)
+        cache_dir = ".dronecut_cache"
+        os.makedirs(cache_dir, exist_ok=True)
         
-        output_final_no_audio = os.path.join(out_dir, "final_no_audio.mp4")
-        output_final = os.path.join(out_dir, "final.mp4")
+        proxy_path = os.path.join(cache_dir, f"proxy_{os.path.basename(video_path)}")
         
-        # Audio Beat Analysis
-        beats = []
-        if self.music_path:
-            beats = get_beat_timestamps(self.music_path)
-            beat_intervals = np.diff(beats).tolist()
-        
-        clip_files = []
-        for j, scene in enumerate(selected_scenes):
-            clip_filename = f"clip_{j+1:03d}.mp4"
-            clip_path = os.path.join(clips_dir, clip_filename)
+        if os.path.exists(proxy_path):
+            logger.info(f"Using cached proxy: {proxy_path}")
+        else:
+            logger.info(f"Creating proxy for {video_path}...")
+            create_proxy(video_path, proxy_path)
             
-            if beats and j < len(beat_intervals):
-                target_duration = beat_intervals[j]
-                source_extract_duration = target_duration * scene["adaptive_speed"]
-                extract_end = scene["start"] + source_extract_duration
-                if extract_end > scene["end"]: extract_end = scene["end"]
+        logger.info(f"Detecting scenes...")
+        scene_list = detect_scenes(proxy_path, threshold=self.threshold)
+            
+        valid_scenes = []
+        for start, end in scene_list:
+            if (end - start) >= self.min_scene_duration:
+                valid_scenes.append({
+                    "start": start,
+                    "end": end,
+                    "source": video_path
+                })
+        
+        logger.info(f"Found {len(valid_scenes)} valid scenes (>{self.min_scene_duration}s)")
+        return valid_scenes
+
+    def _stage_fast_scoring(self, video_path, scenes, pos_prompts=None, neg_prompts=None):
+        """
+        Calculates Semantic (CLIP) and Aesthetic scores on a single high-quality keyframe.
+        """
+        logger.info(f"Scoring {len(scenes)} scenes...")
+        scored_scenes = []
+        
+        for scene in tqdm(scenes, desc="Fast Scoring"):
+            mid_time = (scene["start"] + scene["end"]) / 2
+            
+            # Extract keyframe from original video for best analysis
+            image = self.analysis_manager.get_frame(video_path, mid_time)
+            if image is None: continue
+            
+            # Semantic & Aesthetic Analysis
+            sem_score, aes_score, _, _ = self.analysis_manager.analyze_scene(
+                image, pos_prompts or self.prompts, neg_prompts or self.negative_prompts, run_vlm=False
+            )
+            
+            # Weighted initial score
+            if self.prompts:
+                initial_score = (sem_score * 0.6) + (aes_score * 0.4)
+            else:
+                initial_score = aes_score # Purely aesthetic if no prompts
                 
-                logger.info(f"Syncing clip {j+1} to beat: {target_duration:.2f}s")
-                extract_clip(scene["input"], clip_path, scene["start"], extract_end, speed=scene["adaptive_speed"])
-            else:
-                logger.info(f"Extracting clip {j+1}: {scene['start']:.1f}-{scene['end']:.1f}")
-                extract_clip(scene["input"], clip_path, scene["start"], scene["end"], speed=scene["adaptive_speed"])
+            scene.update({
+                "semantic_score": sem_score,
+                "aesthetic_score": aes_score,
+                "initial_score": initial_score,
+                "image": image # Cache image for VLM stage
+            })
+            scored_scenes.append(scene)
             
-            clip_files.append(clip_path)
-            
-        if clip_files:
-            concatenate_clips(clip_files, output_final_no_audio)
-            if self.music_path:
-                add_background_music(output_final_no_audio, self.music_path, output_final)
-                os.remove(output_final_no_audio)
-            else:
-                os.rename(output_final_no_audio, output_final)
-            return output_final
-        return None
+        # Sort by initial score for the funnel
+        scored_scenes.sort(key=lambda x: x["initial_score"], reverse=True)
+        return scored_scenes
 
-    def run(self, input_videos, out_dir):
-        """Standard CLI entry point"""
-        # Analysis
-        all_scenes = self.analyze(input_videos, out_dir)
+    def _stage_vlm_funnel(self, video_path, scenes):
+        """
+        Runs the expensive VLM on the top subset of scenes.
+        """
+        # Funnel: Top 30%, max 15 scenes
+        funnel_limit = min(len(scenes), max(5, int(len(scenes) * 0.3)))
+        if funnel_limit > 15: funnel_limit = 15
         
-        # Automatic selection (same logic as before)
-        selected_scenes = []
-        total_selected_duration = 0
+        logger.info(f"Funneling top {funnel_limit} scenes to Cinematic VLM...")
         
-        # We need a beat count if music is present
-        target_count = self.max_scenes
-        if self.music_path:
-            # We don't want to re-analyze music here, but run() is for CLI.
-            # For CLI we just use the simple logic.
-            pass
-
-        for scene in all_scenes:
-            is_repetitive = False
-            for selected in selected_scenes:
-                similarity = self.cosine_similarity(scene["embedding"], selected["embedding"])
-                if similarity > 0.94: 
-                    is_repetitive = True
-                    break
-            if is_repetitive: continue
+        for i in range(len(scenes)):
+            scene = scenes[i]
+            if i < funnel_limit:
+                # Top tier: Run Moondream2
+                _, _, cin_score, _ = self.analysis_manager.analyze_scene(
+                    scene["image"], [], [], run_vlm=True
+                )
+                scene["cinematic_score"] = cin_score
+            else:
+                scene["cinematic_score"] = 0.0
             
-            selected_scenes.append(scene)
-            if not self.music_path:
-                total_selected_duration += scene["duration"] / scene["adaptive_speed"]
-                if self.max_duration and total_selected_duration > self.max_duration:
-                    break
-            if len(selected_scenes) >= target_count:
-                break
+            # Final Weighted Score: 40% Semantics, 30% Aesthetics, 30% Cinematic VLM
+            scene["total_score"] = (scene["semantic_score"] * 0.4) + \
+                                  (scene["aesthetic_score"] * 0.3) + \
+                                  (scene["cinematic_score"] * 0.3)
+            
+            # Clean up memory
+            if "image" in scene: del scene["image"]
+            
+        return scenes
+
+    def _stage_extraction(self, video_path, scenes, out_dir, video_index):
+        """
+        Generates final preview MP4s and assembles the metadata.
+        """
+        scenes.sort(key=lambda x: x["total_score"], reverse=True)
+        final_count = min(len(scenes), self.max_scenes)
         
-        selected_scenes.sort(key=lambda x: (x["input"], x["start"]))
-        self.export(selected_scenes, out_dir)
-        logger.info(f"Processing complete. Results in: {out_dir}")
+        final_results = []
+        for i in range(final_count):
+            scene = scenes[i]
+            scene_id = f"v{video_index}_s{i}"
+            preview_filename = f"scene_{scene_id}.mp4"
+            preview_path = os.path.join(out_dir, preview_filename)
+            
+            extract_clip(video_path, preview_path, scene["start"], scene["end"], speed=self.speed)
+            
+            final_results.append({
+                "scene_id": scene_id,
+                "source_video": os.path.basename(video_path),
+                "source_path": video_path, # Keep full path for export
+                "start": scene["start"],
+                "end": scene["end"],
+                "duration": scene["end"] - scene["start"],
+                "preview_path": preview_filename,
+                "semantic_score": round(scene["semantic_score"], 2),
+                "aesthetic_score": round(scene["aesthetic_score"], 2),
+                "cinematic_score": round(scene["cinematic_score"], 2),
+                "total_score": round(scene["total_score"], 2),
+                "metadata": {
+                    "vlm_analyzed": i < 15,
+                    "rank": i + 1
+                }
+            })
+            
+        return final_results
+
+    def _stage_export_montage(self, scenes, out_dir, music_path):
+        """Stage 5: Create the final edited video (optionally synced to music)."""
+        output_path = os.path.join(out_dir, "final_montage.mp4")
+        logger.info(f"Creating final montage: {output_path}")
+        from .video import export_final_video
+        export_final_video(scenes, output_path, music_path=music_path)

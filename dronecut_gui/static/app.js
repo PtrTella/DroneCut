@@ -120,12 +120,14 @@ function renderTimeline() {
             </div>
             <div class="card-info">
                 <div class="card-header">
-                    <span class="scene-time">Scene #${scene.id + 1} | ${scene.duration.toFixed(1)}s</span>
-                    <span class="scene-score">${(scene.score).toFixed(1)}</span>
+                    <span class="scene-time">${formatTime(scene.start)} - ${formatTime(scene.end)}</span>
+                    <span class="scene-score">${(scene.score * 100).toFixed(0)}</span>
                 </div>
                 <div class="scene-meta">
-                    <span>${scene.adaptive_speed.toFixed(1)}x Speed</span>
-                    <span>${(scene.clip_score * 100).toFixed(0)}% Match</span>
+                    <span>🎬 Semantica: <b>${(scene.semantic_score * 100).toFixed(0)}</b></span>
+                    <span>✨ Estetica: <b>${(scene.aesthetic_score * 100).toFixed(0)}</b></span>
+                    ${scene.cinematic_score > 0 ? `<span class="regia-badge">🤖 Regia: <b>${(scene.cinematic_score * 100).toFixed(0)}</b></span>` : ''}
+                    <span>⚡ ${(scene.adaptive_speed).toFixed(1)}x</span>
                 </div>
             </div>
         `;
