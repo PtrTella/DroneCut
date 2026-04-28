@@ -52,7 +52,9 @@ def trim_scene(video_path, scene, fps, total_duration):
     end = min(scene["end_sec"], total_duration)
     duration = end - start
     
-    if duration < 1.0: return {}
+    if duration < 1.0: 
+        scene["discard_reason"] = f"Too_Short_Duration_{duration:.1f}"
+        return {}
 
     # Fast Start Trim (check only first 2s)
     start_scores = calculate_stability_window(video_path, start, duration=min(duration, 2.0))
@@ -76,7 +78,9 @@ def trim_scene(video_path, scene, fps, total_duration):
     new_start = max(0, new_start)
     new_end = min(total_duration, new_end)
     
-    if (new_end - new_start) < 0.5: return {}
+    if (new_end - new_start) < 0.5: 
+        scene["discard_reason"] = "Too_Short_After_Surgical_Trim"
+        return {}
 
     return {
         **scene,

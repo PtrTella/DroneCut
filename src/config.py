@@ -25,7 +25,7 @@ MAX_SCENE_DURATION = 45.0
 DBSCAN_EPS = 0.12 # Ultra-stretto per creare micro-cluster specifici
 DBSCAN_MIN_SAMPLES = 1 # Non scartare nulla come rumore
 AMBIGUITY_THRESHOLD = 0.70 # Molto permissivo: organizza in piccoli gruppi ma non buttare via niente
-MIN_SCENE_DURATION = 3.0 
+MIN_SCENE_DURATION = 2.0 
 
 # Stage 4: Surgical Trimmer (OpenCV)
 STABILITY_THRESHOLD = 1.5 

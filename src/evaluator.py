@@ -27,7 +27,7 @@ class SceneEvaluator:
         logger.info(f"Initializing SceneEvaluator on {self.device} (VLM Director Engine)")
         
         # Load CLIP & Aesthetic Predictor
-        self.clip_model = CLIPModel.from_pretrained(CLIP_MODEL, torch_dtype=self.dtype).to(self.device)
+        self.clip_model = CLIPModel.from_pretrained(CLIP_MODEL, dtype=self.dtype).to(self.device)
         self.clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL)
         self.aesthetic_head = self._load_aesthetic_head()
         
@@ -54,7 +54,7 @@ class SceneEvaluator:
             self.vlm_model = AutoModelForCausalLM.from_pretrained(
                 MOONDREAM_MODEL, 
                 trust_remote_code=True, 
-                torch_dtype=self.dtype
+                dtype=self.dtype
             ).to(self.device)
             self.vlm_tokenizer = AutoTokenizer.from_pretrained(MOONDREAM_MODEL)
         except Exception as e:
@@ -69,8 +69,10 @@ class SceneEvaluator:
         try:
             enc = self.vlm_model.encode_image(image)
             answer = self.vlm_model.answer_question(enc, prompt, self.vlm_tokenizer).strip().upper()
+            logger.debug(f"VLM Audit Answer: {answer}")
             return "YES" in answer
-        except:
+        except Exception as e:
+            logger.error(f"VLM Audit error: {e}")
             return True # In case of error, we keep it
 
     def calculate_relevance(self, image, theme_prompt):

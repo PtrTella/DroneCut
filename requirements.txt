@@ -17,3 +17,4 @@ huggingface_hub
 accelerate
 scikit-learn
 mlx-vlm
+customtkinter

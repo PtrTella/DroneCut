@@ -131,6 +131,34 @@ class Director:
             
         return final_selection, vlm_discarded
 
+    def save_debug_report(self, all_discarded):
+        report_path = os.path.join(self.output_dir, "debug_report.json")
+        summary = {
+            "total_discarded": len(all_discarded),
+            "reasons": {}
+        }
+        for s in all_discarded:
+            reason = s.get("discard_reason", "unknown")
+            summary["reasons"][reason] = summary["reasons"].get(reason, 0) + 1
+            
+        report = {
+            "summary": summary,
+            "details": [
+                {
+                    "id": s.get("id"),
+                    "start": s.get("start_sec"),
+                    "end": s.get("end_sec"),
+                    "reason": s.get("discard_reason"),
+                    "aesthetic_score": s.get("aesthetic_score"),
+                    "relevance_score": s.get("relevance_score"),
+                    "cluster_id": s.get("cluster_id")
+                } for s in all_discarded
+            ]
+        }
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2)
+        logger.info(f"Debug report saved to {report_path}")
+
     def export_debug_frames(self, video_path, scenes, debug_dir):
         os.makedirs(debug_dir, exist_ok=True)
         cap = cv2.VideoCapture(video_path)
