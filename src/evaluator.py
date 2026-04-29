@@ -4,11 +4,10 @@ import cv2
 import logging
 import gc
 import os
-import re
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import CLIPProcessor, CLIPModel
 from huggingface_hub import hf_hub_download
-from .config import CLIP_MODEL, AESTHETIC_MODEL, MOONDREAM_MODEL
+from .config import CLIP_MODEL, AESTHETIC_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +23,12 @@ class SceneEvaluator:
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "mps" else torch.float32
         
-        logger.info(f"Initializing SceneEvaluator on {self.device} (VLM Director Engine)")
+        logger.info(f"Initializing SceneEvaluator on {self.device} (Technical Engine)")
         
         # Load CLIP & Aesthetic Predictor
         self.clip_model = CLIPModel.from_pretrained(CLIP_MODEL, dtype=self.dtype).to(self.device)
         self.clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL)
         self.aesthetic_head = self._load_aesthetic_head()
-        
-        # VLM State
-        self.vlm_model = None
-        self.vlm_tokenizer = None
 
     def _load_aesthetic_head(self):
         try:
@@ -47,59 +42,6 @@ class SceneEvaluator:
             logger.error(f"Failed to load aesthetic head: {e}")
             return None
 
-    def _ensure_vlm(self):
-        if self.vlm_model is not None: return
-        logger.info(f"Loading Moondream2 (VLM Director)...")
-        try:
-            self.vlm_model = AutoModelForCausalLM.from_pretrained(
-                MOONDREAM_MODEL, 
-                trust_remote_code=True, 
-                dtype=self.dtype
-            ).to(self.device)
-            self.vlm_tokenizer = AutoTokenizer.from_pretrained(MOONDREAM_MODEL)
-        except Exception as e:
-            logger.error(f"VLM load failed: {e}")
-
-    def audit_quality(self, image):
-        """
-        VLM Auditor: Scarta errori macroscopici di inquadratura.
-        """
-        self._ensure_vlm()
-        prompt = "Look at this image. Is the shot well-framed and visually interesting for a drone video? Answer strictly YES or NO."
-        try:
-            enc = self.vlm_model.encode_image(image)
-            answer = self.vlm_model.answer_question(enc, prompt, self.vlm_tokenizer).strip().upper()
-            logger.debug(f"VLM Audit Answer: {answer}")
-            return "YES" in answer
-        except Exception as e:
-            logger.error(f"VLM Audit error: {e}")
-            return True # In case of error, we keep it
-
-    def calculate_relevance(self, image, theme_prompt):
-        """
-        VLM Theme Scoring: Da 1 a 10 quanto la scena c'entra con il desiderio dell'utente.
-        """
-        if not theme_prompt: return 10
-        self._ensure_vlm()
-        prompt = f"Theme: {theme_prompt}. Look at this image. How relevant is this shot to the theme on a scale from 1 to 10? Answer with only the digit."
-        try:
-            enc = self.vlm_model.encode_image(image)
-            answer = self.vlm_model.answer_question(enc, prompt, self.vlm_tokenizer).strip()
-            # Extract first digit found
-            digit = re.search(r'\d+', answer)
-            return int(digit.group()) if digit else 5
-        except:
-            return 7
-
-    def generate_caption(self, image):
-        self._ensure_vlm()
-        prompt = "Describe this aerial drone landscape photography in max 5 words, focusing on the main geographical features."
-        try:
-            inputs = self.vlm_model.encode_image(image)
-            return self.vlm_model.answer_question(inputs, prompt, self.vlm_tokenizer)
-        except:
-            return "landscape shot"
-
     def evaluate_aesthetic(self, image):
         inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
         if self.dtype == torch.float16:
@@ -112,15 +54,27 @@ class SceneEvaluator:
 
     def process_scenes_optimized(self, video_path, scenes):
         cap = cv2.VideoCapture(video_path)
-        logger.info(f"Aesthetic Scoring for {len(scenes)} candidates...")
+        logger.info(f"Aesthetic Scoring for {len(scenes)} candidates (Multi-Frame Average)...")
         for scene in scenes:
-            mid_time = (scene["trimmed_start"] + scene["trimmed_end"]) / 2
-            cap.set(cv2.CAP_PROP_POS_MSEC, mid_time * 1000)
-            ret, frame = cap.read()
-            if ret:
-                scene["_temp_frame"] = frame 
-                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                scene["aesthetic_score"] = self.evaluate_aesthetic(image)
+            start = scene["trimmed_start"]
+            end = scene["trimmed_end"]
+            duration = end - start
+            
+            # Sampling strategy: 3 points (25%, 50%, 75%)
+            sample_points = [start + duration * 0.25, start + duration * 0.5, start + duration * 0.75]
+            scores = []
+            
+            for i, t in enumerate(sample_points):
+                cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+                ret, frame = cap.read()
+                if ret:
+                    if i == 1: # Keep mid-frame for thumbnail
+                         scene["_temp_frame"] = frame 
+                    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    scores.append(self.evaluate_aesthetic(image))
+            
+            if scores:
+                scene["aesthetic_score"] = round(sum(scores) / len(scores), 2)
             else:
                 scene["aesthetic_score"] = 0.0
         cap.release()
@@ -128,7 +82,7 @@ class SceneEvaluator:
 
     def cleanup(self):
         logger.info("Aggressive VRAM Cleanup...")
-        self.vlm_model = self.vlm_tokenizer = self.clip_model = self.aesthetic_head = None
+        self.clip_model = self.aesthetic_head = None
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()

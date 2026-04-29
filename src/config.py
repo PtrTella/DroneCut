@@ -10,29 +10,24 @@ DEBUG_DIR = os.path.join(DATA_DIR, "debug")
 
 # Debug & UI
 DEBUG_MODE = True 
-THEME_PROMPT = None 
 
-# Stage 1: Proxy
+# Stage 1: Proxy & Chronological Detection
 PROXY_RES = "854:480"
 PROXY_FPS = 1 
-
-# Stage 2: Semantic Mapping (CLIP)
 CLIP_MODEL = "openai/clip-vit-base-patch32"
-SEMANTIC_THRESHOLD = 0.87
-MAX_SCENE_DURATION = 45.0 
+SEMANTIC_CUT_THRESHOLD = 0.85  # Sotto questo valore di similarità tra frame(t) e frame(t-1), genera un taglio.
 
-# Stage 3: DBSCAN Clustering & Ambiguity
-DBSCAN_EPS = 0.12 # Ultra-stretto per creare micro-cluster specifici
-DBSCAN_MIN_SAMPLES = 1 # Non scartare nulla come rumore
-AMBIGUITY_THRESHOLD = 0.70 # Molto permissivo: organizza in piccoli gruppi ma non buttare via niente
-MIN_SCENE_DURATION = 2.0 
-
-# Stage 4: Surgical Trimmer (OpenCV)
+# Stage 2: Stability Audit (OpenCV - Fast Center-Sample)
 STABILITY_THRESHOLD = 1.5 
+MIN_SCENE_DURATION = 2.0       # Secondi. Scarta la clip se la zona stabile è più corta di questo valore.
+TARGET_CENTER_DURATION = 3.0   # Quanti secondi estrarre dal centro
+LONG_SCENE_THRESHOLD = 4.0     # Soglia oltre la quale si applica il taglio centrale
+MAX_CHAOS_MAGNITUDE = 12.0     # Soglia di tolleranza al mosso (picco)
+MAX_JITTER_THRESHOLD = 3.0      # Soglia di tolleranza agli scatti (jitter)
 
-# Stage 5 & 6: Evaluator & VLM Director
-MOONDREAM_MODEL = "vikhyatk/moondream2" 
+# Stage 3: Aesthetic Scoring (CLIP-Aesthetic)
 AESTHETIC_MODEL = "shunk031/aesthetics-predictor-v1-vit-base-patch32"
-AESTHETIC_THRESHOLD = 6.0 
-TOP_K_PER_CLUSTER = 3 
-RELEVANCE_THRESHOLD = 6 
+# Note: AESTHETIC_MIN_SCORE removed. We no longer discard clips automatically based on score.
+
+# Stage 4: Project Management
+PROJECT_FILE = os.path.join(OUTPUT_DIR, "project.dcproj")
