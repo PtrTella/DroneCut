@@ -1,34 +1,34 @@
 import subprocess
 import os
 import logging
-from .config import PROXY_RES, PROXY_FPS, PROXY_DIR
+from .config import PROXY_RES, STABILITY_FPS, PROXY_DIR, FFMPEG_BIN
 
 logger = logging.getLogger(__name__)
 
 def generate_proxy(input_path):
     """
     Generates a low-res, low-fps proxy for fast analysis.
-    Optimized for Apple Silicon (if ffmpeg supports h264_videotoolbox).
+    Uses the FFmpeg binary defined in config.
     """
     filename = os.path.basename(input_path)
-    output_path = os.path.join(PROXY_DIR, f"proxy_{filename}")
+    res_str = PROXY_RES.replace(":", "x")
+    proxy_name = f"proxy_{res_str}_{STABILITY_FPS}fps_{filename}"
+    output_path = os.path.join(PROXY_DIR, proxy_name)
     
     if os.path.exists(output_path):
         logger.info(f"Proxy already exists: {output_path}")
         return output_path
 
-    logger.info(f"Generating proxy: {output_path} ({PROXY_RES}, {PROXY_FPS} FPS)")
+    logger.info(f"Generating proxy: {output_path} ({PROXY_RES}, {STABILITY_FPS} FPS)")
     
-    # Try to use hardware acceleration (videotoolbox for Mac)
-    # If it fails, fallback to libx264
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG_BIN, "-y",
         "-i", input_path,
-        "-vf", f"scale={PROXY_RES},fps={PROXY_FPS}",
-        "-c:v", "libx264", # libx264 is very fast for low res, and compatible
+        "-vf", f"scale={PROXY_RES},fps={STABILITY_FPS}",
+        "-c:v", "libx264", 
         "-preset", "ultrafast",
         "-crf", "30",
-        "-an", # No audio
+        "-an",
         output_path
     ]
     
@@ -38,11 +38,3 @@ def generate_proxy(input_path):
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg proxy generation failed: {e.stderr.decode()}")
         raise
-
-if __name__ == "__main__":
-    import sys
-    logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) > 1:
-        generate_proxy(sys.argv[1])
-    else:
-        print("Usage: python -m src.proxy <input_video_path>")

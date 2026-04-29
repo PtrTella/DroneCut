@@ -5,7 +5,7 @@ import json
 import cv2
 import numpy as np
 from PIL import Image
-from .config import OUTPUT_DIR, PROJECT_FILE
+from .config import OUTPUT_DIR, PROJECT_FILE, FFMPEG_BIN, CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -14,15 +14,18 @@ class Director:
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def serialize_project(self, final_scenes, video_path):
+    def serialize_project(self, final_scenes, video_path, proxy_path=None):
         """
         Stage 4: Final Serialization
         Saves thumbnails, generates sequential titles, and exports the .dcproj manifest.
+        Uses proxy_path for thumbnails if provided (much faster).
         """
-        thumb_dir = os.path.join(self.output_dir, "thumbnails")
+        thumb_source = proxy_path if proxy_path else video_path
+        # Thumbnails in Cache instead of Output for a cleaner export folder
+        thumb_dir = os.path.join(CACHE_DIR, "thumbnails")
         os.makedirs(thumb_dir, exist_ok=True)
         
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(thumb_source)
         project_timeline = []
         
         for i, scene in enumerate(final_scenes):
@@ -60,7 +63,7 @@ class Director:
         
         # Save .dcproj (JSON)
         project_data = {
-            "version": "4.0",
+            "version": "5.2",
             "video_source": video_path,
             "total_clips": len(project_timeline),
             "timeline": project_timeline
@@ -73,7 +76,8 @@ class Director:
         return project_timeline
 
     def save_debug_report(self, all_discarded):
-        report_path = os.path.join(self.output_dir, "debug_report.json")
+        # Debug report in Cache
+        report_path = os.path.join(CACHE_DIR, "debug_report.json")
         summary = {
             "total_discarded": len(all_discarded),
             "reasons": {}
@@ -98,20 +102,6 @@ class Director:
             json.dump(report, f, indent=2)
         logger.info(f"Debug report saved to {report_path}")
 
-    def export_debug_frames(self, video_path, scenes, debug_dir):
-        os.makedirs(debug_dir, exist_ok=True)
-        cap = cv2.VideoCapture(video_path)
-        for scene in scenes:
-            mid_sec = (scene["start_sec"] + scene["end_sec"]) / 2
-            cap.set(cv2.CAP_PROP_POS_MSEC, mid_sec * 1000)
-            ret, frame = cap.read()
-            if ret:
-                reason = scene.get("discard_reason", "unknown")
-                filename = f"scene_{scene['id']}_{reason}.jpg"
-                path = os.path.join(debug_dir, filename)
-                cv2.imwrite(path, frame)
-        cap.release()
-
     def export_timeline(self, video_path, scenes):
         target_dir = os.path.join(self.output_dir, "timeline")
         os.makedirs(target_dir, exist_ok=True)
@@ -121,9 +111,11 @@ class Director:
             duration = end - start
             filename = f"shot_{i:03d}_id_{scene['id']}.mp4"
             output_path = os.path.join(target_dir, filename)
+            
             cmd = [
-                "ffmpeg", "-y", "-ss", str(start), "-t", str(duration),
+                FFMPEG_BIN, "-y", "-ss", str(start), "-t", str(duration),
                 "-i", video_path, "-c", "copy", "-avoid_negative_ts", "make_non_negative",
                 output_path
             ]
             subprocess.run(cmd, capture_output=True)
+        logger.info(f"Export completed. Files located in: {target_dir}")

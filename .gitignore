@@ -7,3 +7,5 @@ gui_output/*
 .dronecut_cache/*
 **/__pycache__/
 data/*
+dist/*
+build/*
