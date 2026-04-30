@@ -84,10 +84,38 @@ class DroneCutPro(ctk.CTk):
                 self.show_home()
 
     def load_library_project(self, name):
-        path = os.path.join(PROJECTS_DIR, name, "config.dcproj")
-        self.project_dir = os.path.join(PROJECTS_DIR, name)
+        project_path = os.path.join(PROJECTS_DIR, name)
+        manifest_path = os.path.join(project_path, "config.dcproj")
+        
+        # 🛡️ Integrity Check: verify if critical analysis files exist
+        required_files = ["heatmap.json", "stability.json"]
+        is_corrupted = False
+        for f in required_files:
+            if not os.path.exists(os.path.join(project_path, f)):
+                is_corrupted = True
+                break
+        
+        if is_corrupted:
+            orig_video = "Percorso non disponibile"
+            try:
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, "r") as f:
+                        data = json.load(f)
+                        orig_video = data.get("video_source", "Percorso non trovato")
+            except Exception: pass
+
+            msg = (f"Il progetto '{name}' risulta incompleto o corrotto.\n\n"
+                   f"Video originale associato:\n{orig_video}\n\n"
+                   "Vuoi eliminarlo definitivamente dalla libreria?")
+            
+            if messagebox.askyesno("Progetto Corrotto", msg):
+                shutil.rmtree(project_path)
+                self.show_home()
+            return
+
+        self.project_dir = project_path
         self.project_name = name
-        self._load_project_file(path)
+        self._load_project_file(manifest_path)
 
     def _load_project_file(self, project_path):
         try:
@@ -118,6 +146,17 @@ class DroneCutPro(ctk.CTk):
             messagebox.showerror("Errore", f"Impossibile caricare: {e}")
 
     def show_config(self, video_path):
+        # 🕵️‍♂️ SMART MATCH: Check if this video was already analyzed
+        self.video_path = video_path
+        self.video_fingerprint = generate_video_fingerprint(video_path)
+        
+        existing_project = self._find_project_by_fingerprint(self.video_fingerprint)
+        if existing_project:
+            if messagebox.askyesno("Video già analizzato", 
+                                   f"Questo video è già presente nella libreria nel progetto:\n'{existing_project}'\n\nVuoi aprire l'analisi esistente invece di rifarla?"):
+                self.load_library_project(existing_project)
+                return
+
         if not self.project_dir:
             default_name = os.path.basename(video_path).split(".")[0]
             dialog = ctk.CTkInputDialog(
@@ -137,11 +176,30 @@ class DroneCutPro(ctk.CTk):
             os.makedirs(self.project_dir, exist_ok=True)
             self._auto_save_project()
         
-        self.video_path = video_path
-        self.video_fingerprint = generate_video_fingerprint(video_path)
         self.clear_view()
         self.current_view = ConfigView(self, video_path)
         self.current_view.grid(row=0, column=0, sticky="nsew")
+
+    def _find_project_by_fingerprint(self, fingerprint):
+        """Scans the library to find a project with the same video signature.
+           Ignores corrupted projects.
+        """
+        if not fingerprint: return None
+        for p_name in self.list_library_projects():
+            try:
+                project_path = os.path.join(PROJECTS_DIR, p_name)
+                # Quick integrity check
+                if not os.path.exists(os.path.join(project_path, "heatmap.json")) or \
+                   not os.path.exists(os.path.join(project_path, "stability.json")):
+                    continue
+
+                path = os.path.join(project_path, "config.dcproj")
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    if data.get("video_fingerprint") == fingerprint:
+                        return p_name
+            except Exception: continue
+        return None
 
     def show_config_back(self):
         if self.video_path:
