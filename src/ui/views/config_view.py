@@ -36,7 +36,7 @@ class ConfigView(ctk.CTkFrame):
         
         # --- OPTIONS ---
         ctk.CTkLabel(self.scroll_form, text="OPZIONI ESPORTAZIONE", font=ctk.CTkFont(size=14, weight="bold"), text_color="#1f538d").pack(pady=(20, 5), anchor="w")
-        self.export_var = tk.BooleanVar(value=True)
+        self.export_var = tk.BooleanVar(value=False)
         self.export_check = ctk.CTkCheckBox(self.scroll_form, text="Esporta automaticamente clip Full-Res (FFmpeg)", variable=self.export_var, font=ctk.CTkFont(size=14))
         self.export_check.pack(pady=10, anchor="w")
         
