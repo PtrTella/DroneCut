@@ -145,12 +145,15 @@ class DroneCutPipeline:
         trimmer.stability_map = stability_map # INJECT CACHE
         
         expanded_scenes = []
+        all_discarded = []
         for i, hero in enumerate(hero_frames):
             feat = np.array(next(h["features"] for h in heatmap if h["timestamp"] == hero["timestamp"]))
             res = trimmer.bidirectional_expand(hero["timestamp"], feat, heatmap, buffer_sec=cfg["EXPANSION_BUFFER_SEC"], min_duration=cfg["MIN_SCENE_DURATION"], semantic_max=cfg["EXP_SEMANTIC_MAX"], semantic_min=cfg["EXP_SEMANTIC_MIN"], max_chaos=cfg["MAX_CHAOS_MAGNITUDE"], max_jitter=cfg["MAX_JITTER_THRESHOLD"])
             if res:
                 res["id"] = i + 1; res["aesthetic_score"] = hero["score"]; res["hero_timestamp"] = hero["timestamp"]
                 expanded_scenes.append(res)
+            else:
+                all_discarded.append(hero)
         
         self._update_progress("Merging Semantico...", 0.85)
         final_scenes = self._merge_scenes(expanded_scenes, heatmap, cfg["SEMANTIC_MERGE_THRESHOLD"])
@@ -162,6 +165,9 @@ class DroneCutPipeline:
             self._update_progress("Esportazione Alta Risoluzione...", 0.95)
             p_name = os.path.basename(project_dir) if project_dir else "DroneCut_Export"
             self.director.export_timeline(video_path, final_scenes, project_name=p_name)
+            
+        if default_config.DEBUG_MODE:
+            self.director.save_debug_report(all_discarded, project_dir=project_dir)
             
         total_time = time.time() - start_time
         self._update_progress(f"✅ Pronto in {total_time:.1f}s!", 1.0)

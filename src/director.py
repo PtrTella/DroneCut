@@ -4,6 +4,7 @@ import logging
 import json
 import cv2
 import numpy as np
+import datetime
 from PIL import Image
 from .config import MOVIES_DIR, FFMPEG_BIN, CACHE_DIR
 
@@ -91,3 +92,18 @@ class Director:
             shutil.rmtree(temp_dir)
             return montage_path
         return None
+
+    def save_debug_report(self, discarded_heroes, project_dir, filename="debug_report.json"):
+        """Saves analysis details to the project folder."""
+        if not project_dir or not os.path.exists(project_dir):
+            return
+            
+        report = {
+            "timestamp": str(datetime.datetime.now()),
+            "discarded_count": len(discarded_heroes),
+            "discarded_details": discarded_heroes
+        }
+        path = os.path.join(project_dir, filename)
+        with open(path, "w") as f:
+            json.dump(report, f, indent=2)
+        logger.info(f"🐞 Debug report saved to project: {path}")
