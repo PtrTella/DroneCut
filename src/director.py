@@ -2,10 +2,7 @@ import os
 import subprocess
 import logging
 import json
-import cv2
-import numpy as np
 import datetime
-from PIL import Image
 from .config import MOVIES_DIR, FFMPEG_BIN, CACHE_DIR
 
 logger = logging.getLogger(__name__)
@@ -33,19 +30,15 @@ class Director:
         return project_timeline
 
     def export_individual_clips(self, video_path, scenes, project_name):
-        """Only exports separate clips."""
         project_output = os.path.join(self.base_output, project_name)
         os.makedirs(project_output, exist_ok=True)
         
         for i, scene in enumerate(scenes):
-            start = scene.get("trimmed_start", scene["start_sec"])
-            end = scene.get("trimmed_end", scene["end_sec"])
-            duration = end - start
-            filename = f"Clip_{i+1:02d}.mp4"
-            output_path = os.path.join(project_output, filename)
+            start, end = scene.get("trimmed_start"), scene.get("trimmed_end")
+            output_path = os.path.join(project_output, f"Clip_{i+1:02d}.mp4")
             
             cmd = [
-                FFMPEG_BIN, "-y", "-ss", str(start), "-t", str(duration),
+                FFMPEG_BIN, "-y", "-ss", str(start), "-t", str(end - start),
                 "-i", video_path, "-c", "copy", "-avoid_negative_ts", "make_non_negative",
                 output_path
             ]
@@ -53,7 +46,6 @@ class Director:
         return project_output
 
     def export_full_montage(self, video_path, scenes, project_name):
-        """Creates a single joined video without saving individual clips (uses temp segments)."""
         project_output = os.path.join(self.base_output, project_name)
         os.makedirs(project_output, exist_ok=True)
         
@@ -62,13 +54,11 @@ class Director:
         
         temp_files = []
         for i, scene in enumerate(scenes):
-            start = scene.get("trimmed_start", scene["start_sec"])
-            end = scene.get("trimmed_end", scene["end_sec"])
-            duration = end - start
+            start, end = scene.get("trimmed_start"), scene.get("trimmed_end")
             temp_path = os.path.join(temp_dir, f"seg_{i:03d}.mp4")
             
             cmd = [
-                FFMPEG_BIN, "-y", "-ss", str(start), "-t", str(duration),
+                FFMPEG_BIN, "-y", "-ss", str(start), "-t", str(end - start),
                 "-i", video_path, "-c", "copy", "-avoid_negative_ts", "make_non_negative",
                 temp_path
             ]
@@ -87,23 +77,17 @@ class Director:
             ]
             subprocess.run(concat_cmd, capture_output=True)
             
-            # Cleanup
             import shutil
             shutil.rmtree(temp_dir)
             return montage_path
         return None
 
     def save_debug_report(self, discarded_heroes, project_dir, filename="debug_report.json"):
-        """Saves analysis details to the project folder."""
-        if not project_dir or not os.path.exists(project_dir):
-            return
-            
+        if not project_dir or not os.path.exists(project_dir): return
         report = {
             "timestamp": str(datetime.datetime.now()),
             "discarded_count": len(discarded_heroes),
             "discarded_details": discarded_heroes
         }
-        path = os.path.join(project_dir, filename)
-        with open(path, "w") as f:
+        with open(os.path.join(project_dir, filename), "w") as f:
             json.dump(report, f, indent=2)
-        logger.info(f"🐞 Debug report saved to project: {path}")

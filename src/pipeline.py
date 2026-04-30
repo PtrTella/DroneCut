@@ -11,6 +11,9 @@ from .trimmer import StabilityTrimmer
 from .director import Director
 from . import config as default_config
 
+# Set logging to WARNING by default to reduce terminal noise
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("PIL").setLevel(logging.WARNING)
 logger = logging.getLogger("DroneCutPipeline")
 
 class DroneCutPipeline:
@@ -22,7 +25,6 @@ class DroneCutPipeline:
     def _update_progress(self, status, progress):
         if self.progress_callback:
             self.progress_callback(status, progress)
-        logger.info(f"[{progress*100:.0f}%] {status}")
 
     def clear_vram(self):
         gc.collect()
@@ -43,7 +45,7 @@ class DroneCutPipeline:
             for idx in sorted_indices:
                 if scores[idx] >= min_score:
                     peaks.append({"timestamp": times[idx], "score": scores[idx]})
-                if len(peaks) > 20: break
+                if len(peaks) > 15: break # Reduced for performance
         peaks.sort(key=lambda x: x["score"], reverse=True)
         filtered_peaks = []
         for p in peaks:
@@ -92,41 +94,36 @@ class DroneCutPipeline:
             "EXP_SEMANTIC_MIN": gui_params.get("exp_semantic_min", 0.75),
             "MAX_CHAOS_MAGNITUDE": gui_params.get("max_chaos", 12.0),
             "MAX_JITTER_THRESHOLD": gui_params.get("max_jitter", 3.0),
-            "EXPORT_HIGH_RES": gui_params.get("export_high_res", True)
+            "EXPORT_HIGH_RES": gui_params.get("export_high_res", False)
         }
 
         start_time = time.time()
-        
         heatmap_cache = os.path.join(project_dir, "heatmap.json") if project_dir else None
         stability_cache = os.path.join(project_dir, "stability.json") if project_dir else None
-        
-        heatmap = None
-        stability_map = None
-        proxy_path = None
+        heatmap, stability_map, proxy_path = None, None, None
 
-        # 🚀 1. SMART RESUME (Load Cache)
+        # 🚀 1. SMART RESUME
         if heatmap_cache and stability_cache and os.path.exists(heatmap_cache) and os.path.exists(stability_cache):
-            self._update_progress("⚡ Caricamento Analisi AI & Stabilità...", 0.35)
+            self._update_progress("⚡ Caricamento Analisi Precedente...", 0.35)
             try:
                 with open(heatmap_cache, "r") as f: heatmap = json.load(f)
                 with open(stability_cache, "r") as f: stability_map = json.load(f)
                 proxy_path = generate_proxy(video_path, output_dir=project_dir)
             except Exception: heatmap = None
 
-        # 🎬 2. FULL ANALYSIS (If no cache)
+        # 🎬 2. FULL ANALYSIS
         if heatmap is None or stability_map is None:
-            self._update_progress("Compressione Video (Proxy)...", 0.05)
+            self._update_progress("Preparazione Media...", 0.05)
             proxy_path = generate_proxy(video_path, output_dir=project_dir)
             
             self._update_progress("Analisi Estetica AI...", 0.15)
             if self.evaluator is None: self.evaluator = SceneEvaluator()
             heatmap = self.evaluator.generate_heatmap(proxy_path)
             
-            self._update_progress("Analisi Stabilità (Flow)...", 0.30)
+            self._update_progress("Analisi Movimento...", 0.30)
             trimmer_tool = StabilityTrimmer(proxy_path)
             stability_map = trimmer_tool.analyze_stability()
             
-            # Save Cache
             if project_dir:
                 try:
                     with open(heatmap_cache, "w") as f:
@@ -135,14 +132,14 @@ class DroneCutPipeline:
                 except Exception: pass
             self.clear_vram()
 
-        # 🎯 3. RE-TUNING STAGE (Always re-runs, but instant)
-        self._update_progress("Identificazione Hero Frames...", 0.45)
+        # 🎯 3. PROCESSING
+        self._update_progress("Identificazione Highlights...", 0.45)
         hero_frames = self._find_peaks(heatmap, cfg["MIN_HERO_SCORE"], cfg["MIN_PEAK_DISTANCE_SEC"])
         if not hero_frames: return []
 
         self._update_progress(f"Espansione Dinamica ({len(hero_frames)} clip)...", 0.65)
         trimmer = StabilityTrimmer(proxy_path)
-        trimmer.stability_map = stability_map # INJECT CACHE
+        trimmer.stability_map = stability_map
         
         expanded_scenes = []
         all_discarded = []
@@ -152,8 +149,7 @@ class DroneCutPipeline:
             if res:
                 res["id"] = i + 1; res["aesthetic_score"] = hero["score"]; res["hero_timestamp"] = hero["timestamp"]
                 expanded_scenes.append(res)
-            else:
-                all_discarded.append(hero)
+            else: all_discarded.append(hero)
         
         self._update_progress("Merging Semantico...", 0.85)
         final_scenes = self._merge_scenes(expanded_scenes, heatmap, cfg["SEMANTIC_MERGE_THRESHOLD"])
@@ -161,14 +157,8 @@ class DroneCutPipeline:
         self._update_progress("Finalizzazione...", 0.95)
         project_timeline = self.director.serialize_project(final_scenes, video_path, proxy_path=proxy_path)
         
-        if cfg["EXPORT_HIGH_RES"]:
-            self._update_progress("Esportazione Alta Risoluzione...", 0.95)
-            p_name = os.path.basename(project_dir) if project_dir else "DroneCut_Export"
-            self.director.export_timeline(video_path, final_scenes, project_name=p_name)
-            
         if default_config.DEBUG_MODE:
             self.director.save_debug_report(all_discarded, project_dir=project_dir)
             
-        total_time = time.time() - start_time
-        self._update_progress(f"✅ Pronto in {total_time:.1f}s!", 1.0)
+        self._update_progress(f"✅ Pronto in {time.time() - start_time:.1f}s!", 1.0)
         return project_timeline

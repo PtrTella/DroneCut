@@ -47,7 +47,7 @@ def build():
         "--collect-all=transformers",
         "--collect-all=tqdm",
         "--clean",
-        "gui.py"
+        "main.py"
     ]
     
     print(f"🛠 Esecuzione comando: {' '.join(cmd)}")

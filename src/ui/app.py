@@ -3,6 +3,7 @@ import threading
 import json
 import shutil
 import datetime
+import logging
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
@@ -13,6 +14,21 @@ from src.ui.views.loading_view import LoadingView
 from src.ui.views.gallery_view import GalleryView
 from src.config import PROJECTS_DIR
 from src.utils import generate_video_fingerprint
+
+class TkinterLogHandler(logging.Handler):
+    def __init__(self, write_func):
+        super().__init__()
+        self.write_func = write_func
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # If the original message had \r, ensure it stays at the very front
+            if isinstance(record.msg, str) and record.msg.startswith("\r"):
+                msg = "\r" + msg.replace("\r", "")
+            self.write_func(msg)
+        except Exception:
+            self.handleError(record)
 
 class DroneCutPro(ctk.CTk):
     def __init__(self):
@@ -138,19 +154,36 @@ class DroneCutPro(ctk.CTk):
         self.gui_params = gui_params
         self.current_view = LoadingView(self)
         self.current_view.grid(row=0, column=0, sticky="nsew")
+        
+        # Setup Log Redirect
+        self.log_handler = TkinterLogHandler(lambda m: self.after(0, self.current_view.write_log, m))
+        self.log_handler.setFormatter(logging.Formatter('%(name)s: %(message)s'))
+        self.log_handler.setLevel(logging.INFO)
+        
+        # Attach to root and sub-loggers to be sure
+        logging.getLogger().addHandler(self.log_handler)
+        logging.getLogger("DroneCutPipeline").addHandler(self.log_handler)
+        
         thread = threading.Thread(target=self._run_pipeline, args=(self.video_path, self.gui_params))
         thread.daemon = True
         thread.start()
 
     def _run_pipeline(self, video_path, params):
         try:
-            # We set export_high_res to False because we handle it in the Gallery manually
             params["export_high_res"] = False
             results = self.pipeline.run(video_path, gui_params=params, project_dir=self.project_dir)
             self.results = results
             self._auto_save_project()
+            
+            # Remove Log Redirect before switching view
+            logging.getLogger().removeHandler(self.log_handler)
+            logging.getLogger("DroneCutPipeline").removeHandler(self.log_handler)
+            
             self.after(0, self.show_gallery, results)
         except Exception as e:
+            if hasattr(self, 'log_handler'):
+                logging.getLogger().removeHandler(self.log_handler)
+                logging.getLogger("DroneCutPipeline").removeHandler(self.log_handler)
             self.after(0, lambda: messagebox.showerror("Errore AI", f"Si è verificato un errore: {e}"))
             self.after(0, self.show_home)
 
@@ -202,6 +235,7 @@ class DroneCutPro(ctk.CTk):
     def on_pipeline_progress(self, status, progress):
         if isinstance(self.current_view, LoadingView):
             self.after(0, self.current_view.update_progress, status, progress)
+            self.after(0, self.current_view.write_log, f"*** STADIO: {status.upper()} ***")
 
     def _ensure_proxy_and_open_gallery(self):
         from src.proxy import generate_proxy
