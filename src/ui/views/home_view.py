@@ -1,6 +1,5 @@
-import os
 import customtkinter as ctk
-from tkinter import filedialog
+import os
 
 class HomeView(ctk.CTkFrame):
     def __init__(self, master):
@@ -8,81 +7,83 @@ class HomeView(ctk.CTkFrame):
         self.master = master
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        # Header
-        self.header = ctk.CTkFrame(self, fg_color="transparent", height=200)
-        self.header.grid(row=0, column=0, sticky="nsew", padx=40, pady=(60, 20))
+        # Center Container
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.grid(row=0, column=0)
+
+        # Logo / Title
+        self.title_label = ctk.CTkLabel(self.container, text="DroneCut Pro 🚁", font=ctk.CTkFont(size=32, weight="bold"))
+        self.title_label.pack(pady=(0, 10))
         
-        self.title = ctk.CTkLabel(self.header, text="DroneCut Pro", font=ctk.CTkFont(size=48, weight="bold"))
-        self.title.pack()
-        
-        self.subtitle = ctk.CTkLabel(self.header, text="AI-Powered Cinematic Video Editor", font=ctk.CTkFont(size=18))
-        self.subtitle.pack(pady=10)
+        self.subtitle_label = ctk.CTkLabel(self.container, text="Editor Intelligente per footage Drone", font=ctk.CTkFont(size=14), text_color="gray")
+        self.subtitle_label.pack(pady=(0, 40))
 
-        # Main Action Area
-        self.main_area = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_area.grid(row=1, column=0, sticky="nsew", padx=40)
-        self.main_area.grid_columnconfigure(0, weight=1)
-        self.main_area.grid_columnconfigure(1, weight=1)
+        # Main Button
+        self.new_proj_btn = ctk.CTkButton(self.container, text="🚀 Nuova Analisi Video AI", height=60, width=300, font=ctk.CTkFont(size=16, weight="bold"), command=self.on_new_project)
+        self.new_proj_btn.pack(pady=10)
 
-        # Left Column: New Project
-        self.new_proj_frame = ctk.CTkFrame(self.main_area, corner_radius=15, border_width=2, border_color="#1f538d")
-        self.new_proj_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        
-        self.new_label = ctk.CTkLabel(self.new_proj_frame, text="✨ Nuovo Progetto AI", font=ctk.CTkFont(size=24, weight="bold"))
-        self.new_label.pack(pady=(30, 10))
-        
-        self.new_desc = ctk.CTkLabel(self.new_proj_frame, text="Carica un video e lascia che l'AI trovi\ni momenti migliori per te.", font=ctk.CTkFont(size=14))
-        self.new_desc.pack(pady=10)
+        # Library Label
+        self.lib_label = ctk.CTkLabel(self.container, text="Libreria Progetti Recenti", font=ctk.CTkFont(size=18, weight="bold"))
+        self.lib_label.pack(pady=(40, 10))
 
-        self.btn_new = ctk.CTkButton(self.new_proj_frame, text="Seleziona Video", 
-                                   command=self.on_new, height=50, font=ctk.CTkFont(size=16, weight="bold"))
-        self.btn_new.pack(pady=40, padx=40, fill="x")
+        # Projects Scrollable Frame
+        self.scroll_frame = ctk.CTkScrollableFrame(self.container, width=500, height=350, fg_color="#1a1a1a")
+        self.scroll_frame.pack(pady=10)
 
-        # Right Column: Project Library
-        self.lib_frame = ctk.CTkFrame(self.main_area, corner_radius=15)
-        self.lib_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-        
-        self.lib_label = ctk.CTkLabel(self.lib_frame, text="📂 Libreria Progetti", font=ctk.CTkFont(size=24, weight="bold"))
-        self.lib_label.pack(pady=(30, 10))
-        
-        self.scroll_lib = ctk.CTkScrollableFrame(self.lib_frame, fg_color="transparent")
-        self.scroll_lib.pack(expand=True, fill="both", padx=20, pady=10)
+        self.load_projects()
 
-        self.refresh_library()
-
-    def refresh_library(self):
-        """Populates the library list."""
-        for widget in self.scroll_lib.winfo_children():
-            widget.destroy()
-
+    def load_projects(self):
         projects = self.master.list_library_projects()
+        
         if not projects:
-            empty_lbl = ctk.CTkLabel(self.scroll_lib, text="Nessun progetto salvato.", font=ctk.CTkFont(slant="italic"))
-            empty_lbl.pack(pady=40)
+            ctk.CTkLabel(self.scroll_frame, text="Nessun progetto salvato", text_color="gray").pack(pady=20)
             return
 
-        for name in projects:
-            row = ctk.CTkFrame(self.scroll_lib, fg_color="#2b2b2b", corner_radius=8)
-            row.pack(fill="x", pady=5, padx=5)
-            
-            p_name = name if len(name) < 30 else name[:27] + "..."
-            lbl = ctk.CTkLabel(row, text=p_name, font=ctk.CTkFont(size=13))
-            lbl.pack(side="left", padx=15, pady=10)
-            
-            btn_del = ctk.CTkButton(row, text="🗑", width=40, fg_color="#a12c2c", hover_color="#c23b3b",
-                                  command=lambda n=name: self.master.delete_project(n))
-            btn_del.pack(side="right", padx=5)
+        for p_name in projects:
+            self.add_project_item(p_name)
 
-            btn_open = ctk.CTkButton(row, text="Apri", width=60, fg_color="#1f538d",
-                                   command=lambda n=name: self.master.load_library_project(n))
-            btn_open.pack(side="right", padx=5)
+    def add_project_item(self, p_name):
+        item_frame = ctk.CTkFrame(self.scroll_frame, fg_color="#2b2b2b", height=70)
+        item_frame.pack(fill="x", pady=5, padx=5)
+        item_frame.pack_propagate(False)
 
-    def on_new(self):
-        file = filedialog.askopenfilename(
-            title="Seleziona Video Drone",
-            filetypes=[("Video Files", "*.mp4 *.mov *.mkv *.avi")]
-        )
-        if file:
-            self.master.show_config(file)
+        # Parsing Name and Date (expected format: Name_YYYYMMDD_HHMM)
+        display_name = p_name
+        display_date = "Data non disponibile"
+        
+        parts = p_name.rsplit("_", 2)
+        if len(parts) >= 3:
+            display_name = parts[0]
+            date_str = parts[1]
+            time_str = parts[2]
+            # Format YYYYMMDD to DD/MM/YYYY
+            if len(date_str) == 8:
+                display_date = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]} {time_str[0:2]}:{time_str[2:4]}"
+
+        # Text Container (Left)
+        text_container = ctk.CTkFrame(item_frame, fg_color="transparent")
+        text_container.pack(side="left", padx=15, pady=10)
+
+        name_label = ctk.CTkLabel(text_container, text=display_name, font=ctk.CTkFont(size=15, weight="bold"), anchor="w")
+        name_label.pack(fill="x")
+
+        date_label = ctk.CTkLabel(text_container, text=display_date, font=ctk.CTkFont(size=11), text_color="#888888", anchor="w")
+        date_label.pack(fill="x")
+
+        # Action Buttons (Right)
+        btn_container = ctk.CTkFrame(item_frame, fg_color="transparent")
+        btn_container.pack(side="right", padx=10)
+
+        open_btn = ctk.CTkButton(btn_container, text="Apri", width=60, height=28, fg_color="#1f538d", command=lambda p=p_name: self.master.load_library_project(p))
+        open_btn.pack(side="left", padx=5)
+
+        del_btn = ctk.CTkButton(btn_container, text="🗑", width=30, height=28, fg_color="#a12d2d", hover_color="#7a2222", command=lambda p=p_name: self.master.delete_project(p))
+        del_btn.pack(side="left", padx=5)
+
+    def on_new_project(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="Seleziona Video Drone", filetypes=[("Video", "*.mp4 *.mov *.mkv")])
+        if path:
+            self.master.show_config(path)
