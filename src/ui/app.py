@@ -1,8 +1,9 @@
 import os
 import threading
 import json
-import tkinter as tk
-from tkinter import messagebox
+import shutil
+import datetime
+from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
 from src.pipeline import DroneCutPipeline
@@ -10,6 +11,8 @@ from src.ui.views.home_view import HomeView
 from src.ui.views.config_view import ConfigView
 from src.ui.views.loading_view import LoadingView
 from src.ui.views.gallery_view import GalleryView
+from src.config import PROJECTS_DIR
+from src.utils import generate_video_fingerprint
 
 class DroneCutPro(ctk.CTk):
     def __init__(self):
@@ -25,8 +28,10 @@ class DroneCutPro(ctk.CTk):
         self.pipeline = DroneCutPipeline(progress_callback=self.on_pipeline_progress)
         self.active_player = None 
         
-        self.project_name = "Progetto Senza Titolo"
         self.video_path = None
+        self.video_fingerprint = None
+        self.project_dir = None
+        self.project_name = None
         self.results = []
         self.gui_params = {}
 
@@ -38,24 +43,155 @@ class DroneCutPro(ctk.CTk):
 
     def show_home(self):
         self.clear_view()
+        self.video_path = None
+        self.video_fingerprint = None
+        self.project_dir = None
+        self.project_name = None
+        self.results = []
         self.current_view = HomeView(self)
         self.current_view.grid(row=0, column=0, sticky="nsew")
 
+    def list_library_projects(self):
+        if not os.path.exists(PROJECTS_DIR): return []
+        projects = []
+        for name in os.listdir(PROJECTS_DIR):
+            path = os.path.join(PROJECTS_DIR, name)
+            if os.path.isdir(path) and os.path.exists(os.path.join(path, "config.dcproj")):
+                projects.append(name)
+        return sorted(projects, reverse=True)
+
+    def delete_project(self, name):
+        path = os.path.join(PROJECTS_DIR, name)
+        if os.path.exists(path):
+            if messagebox.askyesno("Elimina Progetto", f"Eliminare definitivamente '{name}'?"):
+                shutil.rmtree(path)
+                self.show_home()
+
+    def load_library_project(self, name):
+        path = os.path.join(PROJECTS_DIR, name, "config.dcproj")
+        self.project_dir = os.path.join(PROJECTS_DIR, name)
+        self.project_name = name
+        self._load_project_file(path)
+
+    def _load_project_file(self, project_path):
+        try:
+            with open(project_path, "r") as f:
+                data = json.load(f)
+            orig_path = data.get("video_source")
+            self.video_fingerprint = data.get("video_fingerprint")
+            self.results = data.get("timeline", [])
+            
+            if not orig_path or not os.path.exists(orig_path):
+                messagebox.showwarning("Media Missing", f"Seleziona file per '{self.project_name}'.")
+                new_path = filedialog.askopenfilename(title="Relink Video", filetypes=[("Video", "*.mp4 *.mov *.mkv")])
+                if not new_path: return
+                
+                # 🕵️‍♂️ Verify Fingerprint on Relink
+                if self.video_fingerprint:
+                    new_fp = generate_video_fingerprint(new_path)
+                    if new_fp != self.video_fingerprint:
+                        if not messagebox.askyesno("Mismatch", "La firma digitale del file non corrisponde all'originale.\nVuoi ricollegarlo comunque?"):
+                            return
+                
+                orig_path = new_path
+                data["video_source"] = orig_path
+                with open(project_path, "w") as f: json.dump(data, f, indent=2)
+            self.video_path = orig_path
+            self._ensure_proxy_and_open_gallery()
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile caricare: {e}")
+
     def show_config(self, video_path):
-        self.clear_view()
+        if not self.project_dir:
+            default_name = os.path.basename(video_path).split(".")[0]
+            dialog = ctk.CTkInputDialog(
+                text=f"Inserisci il nome del progetto:\n(Default: {default_name})", 
+                title="Nuovo Progetto"
+            )
+            input_name = dialog.get_input()
+            
+            if input_name is None: return # Cancelled
+            
+            # Use default if empty
+            input_name = input_name.strip() or default_name
+            
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+            self.project_name = f"{input_name}_{ts}"
+            self.project_dir = os.path.join(PROJECTS_DIR, self.project_name)
+            os.makedirs(self.project_dir, exist_ok=True)
+            self._auto_save_project()
+        
         self.video_path = video_path
+        self.video_fingerprint = generate_video_fingerprint(video_path)
+        self.clear_view()
         self.current_view = ConfigView(self, video_path)
         self.current_view.grid(row=0, column=0, sticky="nsew")
+
+    def show_config_back(self):
+        if self.video_path:
+            self.clear_view()
+            self.current_view = ConfigView(self, self.video_path)
+            self.current_view.grid(row=0, column=0, sticky="nsew")
 
     def show_loading(self, gui_params):
         self.clear_view()
         self.gui_params = gui_params
         self.current_view = LoadingView(self)
         self.current_view.grid(row=0, column=0, sticky="nsew")
-        
         thread = threading.Thread(target=self._run_pipeline, args=(self.video_path, self.gui_params))
         thread.daemon = True
         thread.start()
+
+    def _run_pipeline(self, video_path, params):
+        try:
+            # We set export_high_res to False because we handle it in the Gallery manually
+            params["export_high_res"] = False
+            results = self.pipeline.run(video_path, gui_params=params, project_dir=self.project_dir)
+            self.results = results
+            self._auto_save_project()
+            self.after(0, self.show_gallery, results)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Errore AI", f"Si è verificato un errore: {e}"))
+            self.after(0, self.show_home)
+
+    def export_clips(self, selected_scenes):
+        """Export individual mp4 files."""
+        if not selected_scenes: return
+        threading.Thread(target=self._run_export, args=("clips", selected_scenes), daemon=True).start()
+
+    def export_montage(self, selected_scenes):
+        """Export single joined mp4 file."""
+        if not selected_scenes: return
+        threading.Thread(target=self._run_export, args=("montage", selected_scenes), daemon=True).start()
+
+    def _run_export(self, mode, scenes):
+        try:
+            from src.director import Director
+            d = Director()
+            if mode == "clips":
+                out = d.export_individual_clips(self.video_path, scenes, self.project_name)
+                self.after(0, lambda: messagebox.showinfo("Export", f"Clip esportate in:\n{out}"))
+            else:
+                out = d.export_full_montage(self.video_path, scenes, self.project_name)
+                self.after(0, lambda: messagebox.showinfo("Export", f"Montaggio completato:\n{out}"))
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Errore Export", str(e)))
+
+    def _auto_save_project(self):
+        if not self.project_dir: return
+        path = os.path.join(self.project_dir, "config.dcproj")
+        data = {
+            "video_source": self.video_path, 
+            "video_fingerprint": self.video_fingerprint,
+            "timeline": self.results
+        }
+        with open(path, "w") as f: json.dump(data, f, indent=2)
+
+    def save_project(self):
+        if isinstance(self.current_view, GalleryView):
+            self.results = self.current_view.get_updated_results()
+        self._auto_save_project()
+        messagebox.showinfo("Salvataggio", "Progetto salvato in libreria!")
 
     def show_gallery(self, results):
         self.clear_view()
@@ -67,35 +203,14 @@ class DroneCutPro(ctk.CTk):
         if isinstance(self.current_view, LoadingView):
             self.after(0, self.current_view.update_progress, status, progress)
 
-    def _run_pipeline(self, video_path, params):
-        try:
-            results = self.pipeline.run(video_path, gui_params=params)
-            self.after(0, self.show_gallery, results)
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Errore AI", f"Si è verificato un errore: {e}"))
-            self.after(0, self.show_home)
-
-    def load_project(self, project_path):
-        try:
-            with open(project_path, "r") as f:
-                data = json.load(f)
-            self.results = data.get("timeline", [])
-            self.video_path = data.get("video_path")
-            self.project_name = os.path.basename(project_path).replace(".dcproj", "")
-            self.show_gallery(self.results)
-        except Exception as e:
-            messagebox.showerror("Errore Caricamento", f"Impossibile caricare il progetto: {e}")
-
-    def save_project(self):
-        from tkinter import filedialog
-        path = filedialog.asksaveasfilename(defaultextension=".dcproj", filetypes=[("DroneCut Project", "*.dcproj")])
-        if path:
-            if isinstance(self.current_view, GalleryView):
-                self.results = self.current_view.get_updated_results()
-            data = {
-                "video_path": self.video_path,
-                "timeline": self.results
-            }
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-            messagebox.showinfo("Salvataggio", "Progetto salvato con successo!")
+    def _ensure_proxy_and_open_gallery(self):
+        from src.proxy import generate_proxy
+        self.clear_view()
+        loading = LoadingView(self)
+        loading.grid(row=0, column=0, sticky="nsew")
+        loading.update_progress("Controllo Proxy...", 0.5)
+        def check_task():
+            proxy_path = generate_proxy(self.video_path, output_dir=self.project_dir)
+            for res in self.results: res["proxy_path"] = proxy_path
+            self.after(0, self.show_gallery, self.results)
+        threading.Thread(target=check_task, daemon=True).start()

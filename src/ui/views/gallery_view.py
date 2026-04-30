@@ -1,7 +1,5 @@
-import os
-import threading
-from tkinter import messagebox
 import customtkinter as ctk
+import os
 from src.ui.widgets.clip_card import ClipCard
 
 class GalleryView(ctk.CTkFrame):
@@ -16,11 +14,25 @@ class GalleryView(ctk.CTkFrame):
         self.title_label = ctk.CTkLabel(self.header, text=f"Timeline DroneCut: {len(results)} clip rilevate", font=ctk.CTkFont(size=18, weight="bold"))
         self.title_label.pack(side="left", padx=20)
 
-        self.export_btn = ctk.CTkButton(self.header, text="🎬 Esporta Selezionate", fg_color="#1f538d", font=ctk.CTkFont(weight="bold"), command=self.on_export)
-        self.export_btn.pack(side="right", padx=20)
+        # BUTTONS AREA
+        self.btn_area = ctk.CTkFrame(self.header, fg_color="transparent")
+        self.btn_area.pack(side="right", padx=10)
 
-        self.save_btn = ctk.CTkButton(self.header, text="💾 Salva Progetto", width=130, fg_color="#333333", command=master.save_project)
-        self.save_btn.pack(side="right", padx=10)
+        self.home_btn = ctk.CTkButton(self.btn_area, text="🏠 Home", width=80, fg_color="#444444", command=master.show_home)
+        self.home_btn.pack(side="right", padx=5)
+
+        self.save_btn = ctk.CTkButton(self.btn_area, text="💾 Salva", width=80, fg_color="#333333", command=master.save_project)
+        self.save_btn.pack(side="right", padx=5)
+
+        self.config_btn = ctk.CTkButton(self.btn_area, text="⚙️ Parametri", width=100, fg_color="#333333", command=master.show_config_back)
+        self.config_btn.pack(side="right", padx=5)
+
+        # THE TWO EXPORT BUTTONS
+        self.export_montage_btn = ctk.CTkButton(self.btn_area, text="🎞️ Esporta Montage", fg_color="#285e3a", hover_color="#214d30", font=ctk.CTkFont(weight="bold"), command=self.on_export_montage)
+        self.export_montage_btn.pack(side="right", padx=5)
+
+        self.export_clips_btn = ctk.CTkButton(self.btn_area, text="🎬 Esporta Clip", fg_color="#1f538d", font=ctk.CTkFont(weight="bold"), command=self.on_export_clips)
+        self.export_clips_btn.pack(side="right", padx=5)
 
         self.scroll_frame = ctk.CTkScrollableFrame(self)
         self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -31,32 +43,32 @@ class GalleryView(ctk.CTkFrame):
             self.cards.append(card)
             self._bind_mouse_wheel(card)
 
-    def _bind_mouse_wheel(self, widget):
-        widget.bind("<MouseWheel>", self._on_mouse_wheel)
-        for child in widget.winfo_children(): self._bind_mouse_wheel(child)
+    def get_selected_scenes(self):
+        """Returns the data list of checked clips."""
+        return [card.data for card in self.cards if card.export_check.get()]
 
-    def _on_mouse_wheel(self, event):
-        self.scroll_frame._parent_canvas.yview_scroll(int(-1 * (event.delta)), "units")
+    def on_export_clips(self):
+        selected = self.get_selected_scenes()
+        if not selected:
+            tk_messagebox.showwarning("Export", "Seleziona almeno una clip!")
+            return
+        self.master.export_clips(selected)
+
+    def on_export_montage(self):
+        selected = self.get_selected_scenes()
+        if not selected:
+            return
+        self.master.export_montage(selected)
 
     def get_updated_results(self):
-        return [dict(card.data, export=card.export_check.get()) for card in self.cards]
+        """Used for saving the project with checkboxes preserved."""
+        # Note: we should probably store the checkbox state in data if we want it persistent
+        return [card.data for card in self.cards]
 
-    def on_export(self):
-        approved = [card.data for card in self.cards if card.export_check.get()]
-        if not approved:
-            messagebox.showwarning("Export", "Nessuna clip selezionata!")
-            return
-        self.export_btn.configure(state="disabled", text="⏳ Esportazione...")
-        threading.Thread(target=self._run_export, args=(approved,), daemon=True).start()
+    def _bind_mouse_wheel(self, widget):
+        widget.bind("<MouseWheel>", self._on_mousewheel)
+        for child in widget.winfo_children():
+            self._bind_mouse_wheel(child)
 
-    def _run_export(self, clips):
-        try:
-            from src.director import Director
-            director = Director()
-            director.export_timeline(self.master.video_path, clips)
-            output_path = os.path.abspath("data/output/timeline")
-            self.after(0, lambda: messagebox.showinfo("Export Completato", f"Clip salvate in:\n{output_path}"))
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Errore Export", str(e)))
-        finally:
-            self.after(0, lambda: self.export_btn.configure(state="normal", text="🎬 Esporta Selezionate"))
+    def _on_mousewheel(self, event):
+        self.scroll_frame._parent_canvas.yview_scroll(int(-1*(event.delta/120)), "units")

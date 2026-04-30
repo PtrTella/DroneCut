@@ -7,7 +7,8 @@ class ClipCard(ctk.CTkFrame):
     def __init__(self, master, data, video_path, app):
         super().__init__(master, border_width=1, border_color="#333333")
         self.data = data
-        self.video_path = video_path
+        self.video_path = video_path # High-res original
+        self.proxy_path = data.get("proxy_path") # Proxy for UI speed
         self.app = app
         self.playing = False
         self.cap = None
@@ -17,9 +18,11 @@ class ClipCard(ctk.CTkFrame):
         self.bind("<Leave>", lambda e: self.configure(border_color="#333333", border_width=1))
 
         self.grid_columnconfigure(1, weight=1)
-        self.preview_label = ctk.CTkLabel(self, text="", width=320, height=180, fg_color="black", corner_radius=8)
+        self.preview_label = ctk.CTkLabel(self, text="Caricamento...", width=320, height=180, fg_color="black", corner_radius=8)
         self.preview_label.grid(row=0, column=0, rowspan=2, padx=10, pady=10)
-        self.load_thumbnail()
+        
+        # Load thumbnail on-the-fly
+        self.after(10, self.load_thumbnail)
 
         self.info_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.info_frame.grid(row=0, column=1, sticky="nw", padx=10, pady=10)
@@ -36,7 +39,7 @@ class ClipCard(ctk.CTkFrame):
         self.ctrl_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.ctrl_frame.grid(row=1, column=1, sticky="sw", padx=10, pady=10)
 
-        self.play_btn = ctk.CTkButton(self.ctrl_frame, text="▶️ Play", width=100, command=self.toggle_play)
+        self.play_btn = ctk.CTkButton(self.ctrl_frame, text="▶️ Preview", width=100, command=self.toggle_play)
         self.play_btn.pack(side="left")
 
         self.export_check = ctk.CTkCheckBox(self.ctrl_frame, text="Includi nell'Export")
@@ -44,13 +47,20 @@ class ClipCard(ctk.CTkFrame):
         self.export_check.pack(side="left", padx=20)
 
     def load_thumbnail(self):
-        path = self.data.get("thumbnail")
-        if path and os.path.exists(path):
-            img = Image.open(path).resize((320, 180), Image.Resampling.LANCZOS)
+        """Extracts a frame on-the-fly for the thumbnail."""
+        source = self.proxy_path if self.proxy_path and os.path.exists(self.proxy_path) else self.video_path
+        cap = cv2.VideoCapture(source)
+        # Use start of scene for thumbnail
+        cap.set(cv2.CAP_PROP_POS_MSEC, self.data['start_sec'] * 1000)
+        ret, frame = cap.read()
+        if ret:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame).resize((320, 180), Image.Resampling.LANCZOS)
             self.ctk_img = ctk.CTkImage(img, size=(320, 180))
-            self.preview_label.configure(image=self.ctk_img)
+            self.preview_label.configure(image=self.ctk_img, text="")
         else:
             self.preview_label.configure(text="No Preview")
+        cap.release()
 
     def toggle_play(self):
         if self.playing: self.stop_playback()
@@ -62,7 +72,10 @@ class ClipCard(ctk.CTkFrame):
         self.playing = True
         self.play_btn.configure(text="⏹ Stop", fg_color="#a12c2c")
         self.app.active_player = self
-        self.cap = cv2.VideoCapture(self.video_path)
+        
+        # USE PROXY FOR PLAYBACK (MUCH FASTER)
+        source = self.proxy_path if self.proxy_path and os.path.exists(self.proxy_path) else self.video_path
+        self.cap = cv2.VideoCapture(source)
         self.cap.set(cv2.CAP_PROP_POS_MSEC, self.data['start_sec'] * 1000)
         self._stream_frame()
 
@@ -83,6 +96,6 @@ class ClipCard(ctk.CTkFrame):
         self.playing = False
         if self._after_id: self.after_cancel(self._after_id)
         if self.cap: self.cap.release(); self.cap = None
-        self.play_btn.configure(text="▶️ Play", fg_color=["#3B8ED0", "#1F6AA5"])
+        self.play_btn.configure(text="▶️ Preview", fg_color=["#3B8ED0", "#1F6AA5"])
         self.load_thumbnail()
         if self.app.active_player == self: self.app.active_player = None

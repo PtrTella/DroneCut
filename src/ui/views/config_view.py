@@ -41,7 +41,7 @@ class ConfigView(ctk.CTkFrame):
         self.export_check.pack(pady=10, anchor="w")
         
         # Start Button
-        self.start_btn = ctk.CTkButton(self.container, text="LANCIA PIPELINE V5.2 🚀", height=60, font=ctk.CTkFont(size=18, weight="bold"), command=self.on_start)
+        self.start_btn = ctk.CTkButton(self.container, text="AVVIA 🚀", height=60, font=ctk.CTkFont(size=18, weight="bold"), command=self.on_start)
         self.start_btn.pack(pady=25, padx=40, fill="x")
 
     def add_param(self, label, key, default, min_v, max_v):
