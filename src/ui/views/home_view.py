@@ -25,7 +25,7 @@ class HomeView(ctk.CTkFrame):
         self.new_proj_btn.pack(pady=10)
 
         # Library Label
-        self.lib_label = ctk.CTkLabel(self.container, text="Libreria Progetti Recenti", font=ctk.CTkFont(size=18, weight="bold"))
+        self.lib_label = ctk.CTkLabel(self.container, text="Libreria Progetti", font=ctk.CTkFont(size=18, weight="bold"))
         self.lib_label.pack(pady=(40, 10))
 
         # Projects Scrollable Frame
